@@ -132,6 +132,8 @@ cargo test
 
 ## 📚 Documentation
 
+> 📚 **Documentation**: All feature guides are now organized in the [`docs/`](docs/) directory for easy navigation.
+
 - **[Pattern Pub/Sub](docs/PATTERN_PUBSUB_README.md)** - Detailed pattern matching guide
 - **[Keyspace Notifications](docs/KEYSPACE_NOTIFICATIONS_README.md)** - Event system documentation
 - **[Monitoring Setup](docs/MONITORING_README.md)** - Prometheus & Grafana configuration
@@ -193,6 +195,55 @@ INFO keyspace
 INFO memory
 ```
 
+## 🔍 Feature Details
+
+### Pattern Pub/Sub Implementation
+- **Efficient Matching**: Compiled regex patterns for performance
+- **Multiple Patterns**: Handle multiple subscriptions simultaneously
+- **Redis Compatible**: Follows Redis PSUBSCRIBE protocol standards
+- **Memory Optimized**: Minimal overhead per pattern subscription
+
+### Keyspace Notifications System
+- **Event Types**: SET, DEL, and EXPIRED operations
+- **Configurable**: Runtime enable/disable via CONFIG command
+- **Performance**: Zero overhead when notifications are disabled
+- **Channel Format**: Standard `__keyevent@0__:event` naming
+
+### Monitoring & Metrics
+- **Built-in Server**: Prometheus-compatible metrics endpoint
+- **Key Metrics**: Operations, memory, keys, pub/sub activity
+- **Auto-provisioning**: Datasources and dashboards configured automatically
+- **Docker Stack**: Complete monitoring infrastructure
+
+## 🚧 Limitations
+
+- **Single Database**: Only supports database 0
+- **Pattern Types**: Limited to glob-style patterns
+- **Event Types**: SET, DEL, EXPIRED operations only
+- **Persistence**: No persistence across server restarts
+- **Cluster Support**: Single-node operation only
+
+## 🔮 Future Enhancements
+
+Potential improvements could include:
+
+- **Advanced Patterns**: Regex support, character classes
+- **Event Types**: RENAME, EXPIRE, and other Redis events
+- **Multi-database**: Support for multiple databases
+- **Event Filtering**: Pattern-based event filtering
+- **Performance**: Pattern indexing and optimization
+- **Persistence**: Event and pattern persistence
+
+## 🎯 Use Cases
+
+These enhancements enable:
+
+- **Real-time Applications**: Pattern-based Pub/Sub for dynamic subscriptions
+- **Event-driven Systems**: Keyspace notifications for database change reactions
+- **Monitoring & Alerting**: Comprehensive metrics and observability
+- **Development & Testing**: Better Redis compatibility for development
+- **Production Monitoring**: Operational visibility and performance tracking
+
 ---
 
-*This README documents the specific enhancements I have contributed to the Mini-Redis project.*
+*This README documents the specific enhancements I have contributed to the Mini-Redis project. All features are production-ready and follow Rust best practices.*
