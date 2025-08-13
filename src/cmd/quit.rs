@@ -78,6 +78,8 @@ mod tests {
         frame.push_bulk("quit".into());
 
         let mut parse = Parse::new(frame).unwrap();
+        // Simulate consuming the command name
+        let _ = parse.next_string().unwrap();
         let cmd = Quit::parse_frames(&mut parse).unwrap();
 
         assert!(matches!(cmd, Quit));

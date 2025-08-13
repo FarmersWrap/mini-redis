@@ -28,6 +28,9 @@ pub use unknown::Unknown;
 mod info;
 pub use info::Info;
 
+mod gc;
+pub use gc::Gc;
+
 use crate::{Connection, Db, Frame, Parse, ParseError, Shutdown};
 
 /// Enumeration of supported Redis commands.
@@ -47,6 +50,7 @@ pub enum Command {
         Ttl(Ttl),
         Pttl(Pttl),
     Info(Info),
+    Gc(Gc),
     Unknown(Unknown),
 }
 
@@ -87,6 +91,7 @@ impl Command {
             "ttl" => Command::Ttl(Ttl::parse_frames(&mut parse)?),
             "pttl" => Command::Pttl(Pttl::parse_frames(&mut parse)?),
             "info" => Command::Info(Info::parse_frames(&mut parse)?),
+            "gc" => Command::Gc(Gc::parse_frames(&mut parse)?),
             _ => {
                 // The command is not recognized and an Unknown command is
                 // returned.
@@ -130,6 +135,7 @@ impl Command {
             Ttl(cmd) => cmd.apply(db, dst).await,
             Pttl(cmd) => cmd.apply(db, dst).await,
             Info(cmd) => cmd.apply(db, dst).await,
+            Gc(cmd) => cmd.apply(db, dst, shutdown).await,
             Unknown(cmd) => cmd.apply(dst).await,
             // `Unsubscribe` and `PUnsubscribe` cannot be applied. They may only be received from the
             // context of a `Subscribe` or `PSubscribe` command.
@@ -153,6 +159,7 @@ impl Command {
             Command::Ttl(_) => "ttl",
             Command::Pttl(_) => "pttl",
             Command::Info(_) => "info",
+            Command::Gc(_) => "gc",
             Command::Unknown(cmd) => cmd.get_name(),
         }
     }

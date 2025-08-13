@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 /// Metrics for tracking Redis server operations
 #[derive(Debug)]
@@ -19,6 +20,14 @@ pub struct Metrics {
     pub keys: AtomicU64,
     /// Current memory usage in bytes (approximate)
     pub mem_bytes: AtomicU64,
+    /// Count of GC cleanup operations
+    pub gc_cleanup_count: AtomicU64,
+    /// Total number of keys cleaned up by GC
+    pub gc_cleanup_total: AtomicU64,
+    /// Total GC cleanup duration in milliseconds
+    pub gc_duration_total: AtomicU64,
+    /// Count of GC cleanup operations (for calculating average duration)
+    pub gc_duration_count: AtomicU64,
 }
 
 impl Metrics {
@@ -33,6 +42,10 @@ impl Metrics {
             sub_count: AtomicU64::new(0),
             keys: AtomicU64::new(0),
             mem_bytes: AtomicU64::new(0),
+            gc_cleanup_count: AtomicU64::new(0),
+            gc_cleanup_total: AtomicU64::new(0),
+            gc_duration_total: AtomicU64::new(0),
+            gc_duration_count: AtomicU64::new(0),
         }
     }
 
@@ -66,6 +79,34 @@ impl Metrics {
         self.sub_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increment GC cleanup count
+    pub fn inc_gc_cleanup_count(&self) {
+        self.gc_cleanup_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Add to GC cleanup total
+    pub fn add_gc_cleanup_total(&self, count: u64) {
+        self.gc_cleanup_total.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Record GC cleanup duration
+    pub fn record_gc_duration(&self, duration: Duration) {
+        let duration_ms = duration.as_millis() as u64;
+        self.gc_duration_total.fetch_add(duration_ms, Ordering::Relaxed);
+        self.gc_duration_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Calculate average GC duration in milliseconds
+    fn gc_duration_avg_ms(&self) -> u64 {
+        let count = self.gc_duration_count.load(Ordering::Relaxed);
+        if count == 0 {
+            0
+        } else {
+            let total = self.gc_duration_total.load(Ordering::Relaxed);
+            total / count
+        }
+    }
+
     /// Update the current number of keys
     pub fn set_keys(&self, count: u64) {
         self.keys.store(count, Ordering::Relaxed);
@@ -79,7 +120,7 @@ impl Metrics {
     /// Get all metrics as a formatted string for INFO command
     pub fn info_string(&self) -> String {
         format!(
-            "ops_ok:{}\r\nops_err:{}\r\nget_hits:{}\r\nget_misses:{}\r\npub_count:{}\r\nsub_count:{}\r\nkeys:{}\r\nmem_bytes:{}\r\n",
+            "ops_ok:{}\r\nops_err:{}\r\nget_hits:{}\r\nget_misses:{}\r\npub_count:{}\r\nsub_count:{}\r\nkeys:{}\r\nmem_bytes:{}\r\ngc_cleanup_count:{}\r\ngc_cleanup_total:{}\r\ngc_duration_avg_ms:{}\r\n",
             self.ops_ok.load(Ordering::Relaxed),
             self.ops_err.load(Ordering::Relaxed),
             self.get_hits.load(Ordering::Relaxed),
@@ -88,6 +129,9 @@ impl Metrics {
             self.sub_count.load(Ordering::Relaxed),
             self.keys.load(Ordering::Relaxed),
             self.mem_bytes.load(Ordering::Relaxed),
+            self.gc_cleanup_count.load(Ordering::Relaxed),
+            self.gc_cleanup_total.load(Ordering::Relaxed),
+            self.gc_duration_avg_ms(),
         )
     }
 
@@ -117,7 +161,16 @@ mini_redis_sub_count {}\n\
 mini_redis_keys {}\n\
 # HELP mini_redis_mem_bytes Current memory usage in bytes\n\
 # TYPE mini_redis_mem_bytes gauge\n\
-mini_redis_mem_bytes {}\n",
+mini_redis_mem_bytes {}\n\
+# HELP mini_redis_gc_cleanup_count Total number of GC cleanup operations\n\
+# TYPE mini_redis_gc_cleanup_count counter\n\
+mini_redis_gc_cleanup_count {}\n\
+# HELP mini_redis_gc_cleanup_total Total number of keys cleaned up by GC\n\
+# TYPE mini_redis_gc_cleanup_total counter\n\
+mini_redis_gc_cleanup_total {}\n\
+# HELP mini_redis_gc_duration_avg_ms Average GC cleanup duration in milliseconds\n\
+# TYPE mini_redis_gc_duration_avg_ms gauge\n\
+mini_redis_gc_duration_avg_ms {}\n",
             self.ops_ok.load(Ordering::Relaxed),
             self.ops_err.load(Ordering::Relaxed),
             self.get_hits.load(Ordering::Relaxed),
@@ -126,6 +179,9 @@ mini_redis_mem_bytes {}\n",
             self.sub_count.load(Ordering::Relaxed),
             self.keys.load(Ordering::Relaxed),
             self.mem_bytes.load(Ordering::Relaxed),
+            self.gc_cleanup_count.load(Ordering::Relaxed),
+            self.gc_cleanup_total.load(Ordering::Relaxed),
+            self.gc_duration_avg_ms(),
         )
     }
 }
@@ -221,5 +277,28 @@ mod tests {
         assert!(prometheus.contains("mini_redis_ops_ok 1"));
         assert!(prometheus.contains("mini_redis_keys 5"));
         assert!(prometheus.contains("mini_redis_mem_bytes 100"));
+    }
+
+    #[test]
+    fn test_gc_metrics() {
+        let metrics = Metrics::new();
+        
+        // Test GC cleanup count
+        metrics.inc_gc_cleanup_count();
+        metrics.inc_gc_cleanup_count();
+        assert_eq!(metrics.gc_cleanup_count.load(Ordering::Relaxed), 2);
+        
+        // Test GC cleanup total
+        metrics.add_gc_cleanup_total(10);
+        metrics.add_gc_cleanup_total(15);
+        assert_eq!(metrics.gc_cleanup_total.load(Ordering::Relaxed), 25);
+        
+        // Test GC duration recording
+        let duration = Duration::from_millis(50);
+        metrics.record_gc_duration(duration);
+        metrics.record_gc_duration(duration);
+        assert_eq!(metrics.gc_duration_count.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.gc_duration_total.load(Ordering::Relaxed), 100);
+        assert_eq!(metrics.gc_duration_avg_ms(), 50);
     }
 } 

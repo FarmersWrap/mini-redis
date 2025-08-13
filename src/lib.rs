@@ -47,6 +47,12 @@ use parse::{Parse, ParseError};
 mod pattern;
 pub use pattern::Pattern;
 
+mod gc_config;
+pub use gc_config::GcConfig;
+
+mod gc_task;
+pub use gc_task::GcTask;
+
 pub mod server;
 
 mod shutdown;

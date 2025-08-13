@@ -3,7 +3,7 @@
 //! Provides an async `run` function that listens for inbound connections,
 //! spawning a task per connection.
 
-use crate::{Command, Connection, Db, DbDropGuard, Shutdown, MetricsServer, Frame};
+use crate::{Command, Connection, Db, DbDropGuard, Shutdown, MetricsServer, Frame, GcTask, GcConfig};
 
 use std::future::Future;
 use std::sync::Arc;
@@ -64,6 +64,9 @@ struct Listener {
 
     /// Metrics server for exposing Prometheus metrics
     metrics_server: Option<MetricsServer>,
+
+    /// Background garbage collection task
+    gc_task: Option<GcTask>,
 }
 
 /// Per-connection handler. Reads requests from `connection` and applies the
@@ -123,6 +126,11 @@ pub async fn run(listener: TcpListener, shutdown: impl Future, metrics_port: Opt
     let db_holder = DbDropGuard::new();
     let metrics = db_holder.db().get_metrics();
     
+    // Initialize GC task with default configuration
+    let gc_config = GcConfig::default();
+    let mut gc_task = GcTask::new(Arc::new(db_holder.db()), gc_config);
+    gc_task.start();
+    
     let mut server = Listener {
         listener,
         db_holder,
@@ -130,6 +138,7 @@ pub async fn run(listener: TcpListener, shutdown: impl Future, metrics_port: Opt
         notify_shutdown,
         shutdown_complete_tx,
         metrics_server: metrics_port.map(|port| MetricsServer::new(metrics, port)),
+        gc_task: Some(gc_task),
     };
 
     // Start the metrics server if a port is specified
@@ -179,6 +188,11 @@ pub async fn run(listener: TcpListener, shutdown: impl Future, metrics_port: Opt
     // Stop the metrics server if it was started
     if let Some(ref mut metrics_server) = server.metrics_server {
         metrics_server.stop().await;
+    }
+
+    // Stop the GC task if it was started
+    if let Some(ref mut gc_task) = server.gc_task {
+        gc_task.stop().await;
     }
 
     // Extract the `shutdown_complete` receiver and transmitter
@@ -280,6 +294,31 @@ impl Listener {
             time::sleep(Duration::from_secs(backoff)).await;
             backoff *= 2;
         }
+    }
+
+    /// Update GC configuration at runtime
+    pub fn update_gc_config(&mut self, config: GcConfig) {
+        if let Some(ref mut gc_task) = self.gc_task {
+            gc_task.update_config(config);
+        }
+    }
+
+    /// Get current GC configuration
+    pub fn get_gc_config(&self) -> Option<&GcConfig> {
+        self.gc_task.as_ref().map(|gc_task| gc_task.config())
+    }
+
+    /// Get GC statistics for monitoring
+    pub fn get_gc_stats(&self) -> Option<String> {
+        self.gc_task.as_ref().map(|gc_task| {
+            let config = gc_task.config();
+            format!(
+                "gc_enabled:{}\r\ngc_interval_ms:{}\r\ngc_batch_size:{}\r\n",
+                config.enabled,
+                config.cleanup_interval.as_millis(),
+                config.batch_size
+            )
+        })
     }
 }
 

@@ -8,7 +8,7 @@ This document describes the additional features and enhancements I have added to
 
 - **TTL & PTTL**: `TTL` and `PTTL` commands for checking key expiration times
 - **INFO**: `INFO` command for server information and statistics
-- **DEL**: `DEL` command for deleting keys with keyspace notifications
+- **DEL**: `DEL` command for deleting keys
 - **QUIT**: `QUIT` command for graceful connection termination
 
 ### Advanced Pub/Sub
@@ -18,24 +18,27 @@ This document describes the additional features and enhancements I have added to
   - `?` matches exactly one character
   - Example: `PSUBSCRIBE news.*` subscribes to all news channels
 
-### Keyspace Notifications
 
-- **Database Event Publishing**: Automatic notifications when database operations occur
-- **Event Types**: SET, DEL, and EXPIRED operations
-- **Configurable**: Enable/disable via `CONFIG SET notify-keyspace-events 1/0`
-- **Redis Compatible**: Standard `__keyevent@0__:event` channel format
 
 ### Configuration Management
 
 - **CONFIG Command**: `CONFIG GET/SET/LIST` for managing server settings
 - **Runtime Configuration**: Change settings without restarting the server
-- **Environment Variables**: Support for `MINI_REDIS_NOTIFY_KEYSPACE_EVENTS`
+
+
+### 🧹 Lightweight GC (Background Cleanup)
+
+- **Background Garbage Collection**: Automatic cleanup of expired keys every 250ms
+- **Batch Processing**: Configurable batch sizes (default: 100 keys per batch)
+- **Non-blocking**: GC runs in background without affecting client operations
+- **Performance Metrics**: Real-time monitoring of cleanup operations and duration
+- **Configurable**: Adjustable cleanup frequency and batch sizes via `GcConfig`
 
 ### Monitoring & Observability
 
 - **Prometheus Integration**: Built-in metrics server at `/metrics` endpoint
 - **Grafana Dashboards**: Pre-configured dashboards for Mini-Redis metrics
-- **Key Metrics**: Operations count, memory usage, key counts, pub/sub operations
+- **Key Metrics**: Operations count, memory usage, key counts, pub/sub operations, GC metrics
 - **Docker Compose**: Complete monitoring stack setup
 
 ## 🚀 Quick Start
@@ -59,10 +62,7 @@ PTTL mykey
 PSUBSCRIBE news.*
 PUBLISH news.sports "Update"
 
-# Keyspace notifications
-CONFIG SET notify-keyspace-events 1
-SUBSCRIBE __keyevent@0__:set
-SET testkey "value"  # Triggers notification
+
 
 # Server info
 INFO
@@ -98,10 +98,12 @@ mini-redis/
 │   │   ├── quit.rs         # QUIT command
 │   │   ├── psubscribe.rs   # Pattern Pub/Sub
 │   │   └── config.rs       # CONFIG command
-│   ├── db.rs               # Enhanced with keyspace notifications
+│   ├── db.rs               # Enhanced with batch cleanup
 │   ├── pattern.rs          # Glob pattern matching
 │   ├── config.rs           # Configuration management
-│   ├── keyspace_notifications.rs  # Event publishing
+
+│   ├── gc_config.rs        # GC configuration management
+│   ├── gc_task.rs          # Background garbage collection task
 │   └── metrics_server.rs   # Prometheus metrics endpoint
 ├── dashboards/              # Grafana dashboards
 ├── prometheus/              # Prometheus configuration
@@ -117,14 +119,26 @@ mini-redis/
 cargo test
 ```
 
+### Test Lightweight GC
+
+```bash
+# Test the background garbage collection system
+./test-gc.sh
+
+# This script demonstrates:
+# - Background GC operation every 250ms
+# - Batch processing of expired keys
+# - Real-time metrics collection
+# - Performance under load
+```
+
 ### Test Specific Features
 
 ```bash
 # Pattern Pub/Sub
 ./test-pattern-pubsub.sh
 
-# Keyspace Notifications
-./test-keyspace-notifications.sh
+
 
 # Monitoring
 ./start-monitoring.sh
@@ -135,7 +149,7 @@ cargo test
 > 📚 **Documentation**: All feature guides are now organized in the [`docs/`](docs/) directory for easy navigation.
 
 - **[Pattern Pub/Sub](docs/PATTERN_PUBSUB_README.md)** - Detailed pattern matching guide
-- **[Keyspace Notifications](docs/KEYSPACE_NOTIFICATIONS_README.md)** - Event system documentation
+
 - **[Monitoring Setup](docs/MONITORING_README.md)** - Prometheus & Grafana configuration
 
 ## 🔧 Scripts Added
@@ -145,16 +159,18 @@ cargo test
 - `run-mini-redis.sh` - Run server with metrics
 - `stop-all.sh` - Stop all services
 - `test-pattern-pubsub.sh` - Test pattern Pub/Sub
-- `test-keyspace-notifications.sh` - Test keyspace events
+
+- `test-gc.sh` - Test lightweight GC (background cleanup) system
 
 ## 🎯 Key Enhancements
 
 1. **Extended Command Set**: Added missing Redis commands for better compatibility
 2. **Pattern Pub/Sub**: Advanced subscription patterns with efficient regex matching
-3. **Keyspace Notifications**: Real-time database event publishing
+
 4. **Configuration Management**: Runtime server configuration
-5. **Monitoring Stack**: Complete observability with Prometheus and Grafana
-6. **Production Ready**: Proper error handling, testing, and documentation
+5. **🧹 Lightweight GC**: Background garbage collection with configurable cleanup
+6. **Monitoring Stack**: Complete observability with Prometheus and Grafana
+7. **Production Ready**: Proper error handling, testing, and documentation
 
 ## 🚀 Usage Examples
 
@@ -169,21 +185,7 @@ PUBLISH news.sports "Sports update"
 PUBLISH updates:a "Update A"
 ```
 
-### Keyspace Notifications
-```bash
-# Enable notifications
-CONFIG SET notify-keyspace-events 1
 
-# Subscribe to events
-SUBSCRIBE __keyevent@0__:set
-SUBSCRIBE __keyevent@0__:del
-SUBSCRIBE __keyevent@0__:expired
-
-# Operations trigger notifications
-SET mykey "value"    # → SET event
-DEL mykey            # → DEL event
-SET expiring "val" EX 5  # → EXPIRED event after 5s
-```
 
 ### Monitoring
 ```bash
@@ -195,6 +197,19 @@ INFO keyspace
 INFO memory
 ```
 
+### Lightweight GC
+```bash
+# GC runs automatically every 250ms
+# Monitor GC performance
+curl http://localhost:9123/metrics | grep gc_
+
+# GC metrics in INFO command
+INFO | grep gc_
+
+# Test GC under load
+./test-gc.sh
+```
+
 ## 🔍 Feature Details
 
 ### Pattern Pub/Sub Implementation
@@ -203,17 +218,20 @@ INFO memory
 - **Redis Compatible**: Follows Redis PSUBSCRIBE protocol standards
 - **Memory Optimized**: Minimal overhead per pattern subscription
 
-### Keyspace Notifications System
-- **Event Types**: SET, DEL, and EXPIRED operations
-- **Configurable**: Runtime enable/disable via CONFIG command
-- **Performance**: Zero overhead when notifications are disabled
-- **Channel Format**: Standard `__keyevent@0__:event` naming
+
 
 ### Monitoring & Metrics
 - **Built-in Server**: Prometheus-compatible metrics endpoint
 - **Key Metrics**: Operations, memory, keys, pub/sub activity
 - **Auto-provisioning**: Datasources and dashboards configured automatically
 - **Docker Stack**: Complete monitoring infrastructure
+
+### 🧹 Lightweight GC System
+- **Background Processing**: Runs every 250ms without blocking operations
+- **Batch Cleanup**: Configurable batch sizes (default: 100 keys per batch)
+- **Performance Metrics**: Real-time monitoring of cleanup operations
+- **Configurable**: Runtime adjustment of cleanup frequency and batch sizes
+- **Memory Efficient**: Minimal overhead with smart locking strategies
 
 ## 🚧 Limitations
 
@@ -239,7 +257,7 @@ Potential improvements could include:
 These enhancements enable:
 
 - **Real-time Applications**: Pattern-based Pub/Sub for dynamic subscriptions
-- **Event-driven Systems**: Keyspace notifications for database change reactions
+
 - **Monitoring & Alerting**: Comprehensive metrics and observability
 - **Development & Testing**: Better Redis compatibility for development
 - **Production Monitoring**: Operational visibility and performance tracking

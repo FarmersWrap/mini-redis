@@ -350,6 +350,62 @@ impl Db {
         self.shared.metrics.set_keys(key_count);
         self.shared.metrics.set_mem_bytes(total_memory);
     }
+
+    /// Clean up expired keys in batches (for GC task)
+    ///
+    /// This method is designed to be called by the background GC task
+    /// and processes expired keys in small batches to avoid blocking.
+    ///
+    /// Returns the number of keys that were cleaned up.
+    pub(crate) async fn cleanup_expired_keys_batch(&self, batch_size: usize) -> usize {
+        let mut cleaned_count = 0;
+        let now = Instant::now();
+        
+        // Get a lock on the state
+        let mut state = self.shared.state.lock().unwrap();
+        
+        // Find expired keys up to the batch size
+        let mut expired_keys = Vec::new();
+        for &(expires_at, ref key) in &state.expirations {
+            if expires_at <= now {
+                expired_keys.push(key.clone());
+                if expired_keys.len() >= batch_size {
+                    break;
+                }
+            } else {
+                // Keys are sorted by expiration time, so we can stop here
+                break;
+            }
+        }
+        
+        // Remove expired keys
+        for key in expired_keys {
+            if let Some(entry) = state.entries.remove(&key) {
+                // Remove from expirations
+                if let Some(expires_at) = entry.expires_at {
+                    state.expirations.remove(&(expires_at, key.clone()));
+                }
+                
+                cleaned_count += 1;
+                
+                // Note: Keyspace notifications were removed from this implementation
+            }
+        }
+        
+        // Update metrics
+        if cleaned_count > 0 {
+            self.shared.metrics.set_keys(state.entries.len() as u64);
+            
+            // Recalculate memory usage
+            let mut total_memory = 0u64;
+            for (key, entry) in &state.entries {
+                total_memory += key.len() as u64 + entry.data.len() as u64;
+            }
+            self.shared.metrics.set_mem_bytes(total_memory);
+        }
+        
+        cleaned_count
+    }
 }
 
 impl Shared {
