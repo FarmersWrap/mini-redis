@@ -7,11 +7,6 @@ use crate::{Connection, Frame, Parse};
 pub struct Quit;
 
 impl Quit {
-    /// Create a new `Quit` command.
-    pub(crate) fn new() -> Quit {
-        Quit
-    }
-
     /// Parse a `Quit` instance from a received frame.
     ///
     /// The `Parse` argument provides a cursor-like API to read fields from the
@@ -56,15 +51,6 @@ impl Quit {
         Ok(())
     }
 
-    /// Converts the command into an equivalent `Frame`.
-    ///
-    /// This is called by the client when encoding a `Quit` command to send
-    /// to the server.
-    pub(crate) fn into_frame(self) -> Frame {
-        let mut frame = Frame::array();
-        frame.push_bulk("quit".into());
-        frame
-    }
 }
 
 #[cfg(test)]

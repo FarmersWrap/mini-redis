@@ -1,11 +1,11 @@
 use crate::{Connection, Frame, Parse};
-
 use bytes::Bytes;
 use tracing::{debug, instrument};
 
-/// Get server information and statistics.
+/// Returns information and statistics about the server.
 ///
-/// Returns various information about the server including metrics and statistics.
+/// This command provides various information about the server's state,
+/// including metrics, configuration, and performance data.
 #[derive(Debug)]
 pub struct Info {
     /// Optional section to return (not implemented yet)
@@ -13,11 +13,6 @@ pub struct Info {
 }
 
 impl Info {
-    /// Create a new `Info` command.
-    pub fn new() -> Info {
-        Info { _section: None }
-    }
-
     /// Parse an `Info` instance from a received frame.
     ///
     /// The `Parse` argument provides a cursor-like API to read fields from the
@@ -67,19 +62,6 @@ impl Info {
 
         Ok(())
     }
-
-    /// Converts the command into an equivalent `Frame`.
-    ///
-    /// This is called by the client when encoding an `Info` command to send to
-    /// the server.
-    pub(crate) fn into_frame(self) -> Frame {
-        let mut frame = Frame::array();
-        frame.push_bulk(Bytes::from("info".as_bytes()));
-        if let Some(section) = self._section {
-            frame.push_bulk(Bytes::from(section.into_bytes()));
-        }
-        frame
-    }
 }
 
 #[cfg(test)]
@@ -88,48 +70,22 @@ mod tests {
     use crate::Frame;
 
     #[test]
-    fn test_info_new() {
-        let info = Info::new();
-        assert!(info._section.is_none());
+    fn test_info_parse_frames() {
+        let mut frame = Frame::array();
+        frame.push_bulk("server".into());
+
+        let mut parse = Parse::new(frame).unwrap();
+        let cmd = Info::parse_frames(&mut parse).unwrap();
+        assert!(cmd._section.is_some());
+        assert_eq!(cmd._section.unwrap(), "server");
     }
 
     #[test]
-    fn test_info_into_frame() {
-        let info = Info::new();
-        let frame = info.into_frame();
-        
-        if let Frame::Array(frames) = frame {
-            assert_eq!(frames.len(), 1);
-            if let Frame::Bulk(bytes) = &frames[0] {
-                assert_eq!(bytes.as_ref(), b"info");
-            } else {
-                panic!("Expected bulk frame");
-            }
-        } else {
-            panic!("Expected array frame");
-        }
-    }
+    fn test_info_parse_frames_no_section() {
+        let mut frame = Frame::array();
 
-    #[test]
-    fn test_info_with_section_into_frame() {
-        let mut info = Info::new();
-        info._section = Some("server".to_string());
-        let frame = info.into_frame();
-        
-        if let Frame::Array(frames) = frame {
-            assert_eq!(frames.len(), 2);
-            if let Frame::Bulk(bytes) = &frames[0] {
-                assert_eq!(bytes.as_ref(), b"info");
-            } else {
-                panic!("Expected bulk frame");
-            }
-            if let Frame::Bulk(bytes) = &frames[1] {
-                assert_eq!(bytes.as_ref(), b"server");
-            } else {
-                panic!("Expected bulk frame");
-            }
-        } else {
-            panic!("Expected array frame");
-        }
+        let mut parse = Parse::new(frame).unwrap();
+        let cmd = Info::parse_frames(&mut parse).unwrap();
+        assert!(cmd._section.is_none());
     }
 } 

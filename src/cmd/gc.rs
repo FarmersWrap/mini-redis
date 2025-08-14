@@ -5,11 +5,6 @@ use crate::{Connection, Frame, Parse, Shutdown};
 pub struct Gc;
 
 impl Gc {
-    /// Create a new `Gc` command.
-    pub(crate) fn new() -> Gc {
-        Gc
-    }
-
     /// Parse a `Gc` instance from a received frame.
     ///
     /// The `Parse` argument provides a cursor-like API to read fields from the
@@ -83,15 +78,6 @@ impl Gc {
         Ok(())
     }
 
-    /// Converts the command into an equivalent `Frame`.
-    ///
-    /// This is called by the client when encoding a `Gc` command to send
-    /// to the server.
-    pub(crate) fn into_frame(self) -> Frame {
-        let mut frame = Frame::array();
-        frame.push_bulk("gc".into());
-        frame
-    }
 }
 
 #[cfg(test)]
@@ -102,7 +88,6 @@ mod tests {
     #[test]
     fn test_gc_parse_frames_get() {
         let mut frame = Frame::array();
-        frame.push_bulk("gc".into());
         frame.push_bulk("get".into());
 
         let mut parse = Parse::new(frame).unwrap();
@@ -114,7 +99,6 @@ mod tests {
     #[test]
     fn test_gc_parse_frames_set() {
         let mut frame = Frame::array();
-        frame.push_bulk("gc".into());
         frame.push_bulk("set".into());
         frame.push_bulk("interval".into());
         frame.push_bulk("250".into());
@@ -128,7 +112,6 @@ mod tests {
     #[test]
     fn test_gc_parse_frames_invalid_subcommand() {
         let mut frame = Frame::array();
-        frame.push_bulk("gc".into());
         frame.push_bulk("invalid".into());
 
         let mut parse = Parse::new(frame).unwrap();

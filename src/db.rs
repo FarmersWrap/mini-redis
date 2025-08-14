@@ -226,12 +226,7 @@ impl Db {
         None
     }
 
-    /// Get the PTTL for a key.
-    ///
-    /// Returns `None` if the key does not exist or has no TTL.
-    pub(crate) fn pttl(&self, key: &str) -> Option<Duration> {
-        self.ttl(key)
-    }
+
 
     /// Check if a key exists in the database.
     ///
@@ -457,12 +452,7 @@ impl Shared {
     }
 }
 
-impl State {
-    /// Get the next expiration time.
-    fn next_expiration(&self) -> Option<Instant> {
-        self.expirations.iter().next().map(|&(expires_at, _)| expires_at)
-    }
-}
+
 
 /// Background task that purges expired keys.
 async fn purge_expired_tasks(shared: Arc<Shared>) {

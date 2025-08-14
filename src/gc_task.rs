@@ -17,7 +17,7 @@ pub struct GcTask {
 
 impl GcTask {
     /// Create a new GC task
-    pub fn new(db: Arc<Db>, config: GcConfig) -> Self {
+    pub(crate) fn new(db: Arc<Db>, config: GcConfig) -> Self {
         Self {
             db,
             config,

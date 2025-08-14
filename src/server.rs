@@ -296,30 +296,7 @@ impl Listener {
         }
     }
 
-    /// Update GC configuration at runtime
-    pub fn update_gc_config(&mut self, config: GcConfig) {
-        if let Some(ref mut gc_task) = self.gc_task {
-            gc_task.update_config(config);
-        }
-    }
 
-    /// Get current GC configuration
-    pub fn get_gc_config(&self) -> Option<&GcConfig> {
-        self.gc_task.as_ref().map(|gc_task| gc_task.config())
-    }
-
-    /// Get GC statistics for monitoring
-    pub fn get_gc_stats(&self) -> Option<String> {
-        self.gc_task.as_ref().map(|gc_task| {
-            let config = gc_task.config();
-            format!(
-                "gc_enabled:{}\r\ngc_interval_ms:{}\r\ngc_batch_size:{}\r\n",
-                config.enabled,
-                config.cleanup_interval.as_millis(),
-                config.batch_size
-            )
-        })
-    }
 }
 
 impl Handler {

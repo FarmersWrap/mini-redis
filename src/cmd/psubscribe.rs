@@ -32,11 +32,6 @@ pub struct PUnsubscribe {
 type Messages = Pin<Box<dyn Stream<Item = Bytes> + Send>>;
 
 impl PSubscribe {
-    /// Create a new `PSubscribe` command which subscribes to the specified patterns.
-    pub(crate) fn new(patterns: Vec<String>) -> PSubscribe {
-        PSubscribe { patterns }
-    }
-
     /// Parse a `PSubscribe` instance from a received frame.
     ///
     /// The `Parse` argument provides a cursor-like API to read fields from the
@@ -175,11 +170,6 @@ impl PSubscribe {
 }
 
 impl PUnsubscribe {
-    /// Create a new `PUnsubscribe` command which unsubscribes from the specified patterns.
-    pub(crate) fn new(patterns: Vec<String>) -> PUnsubscribe {
-        PUnsubscribe { patterns }
-    }
-
     /// Parse a `PUnsubscribe` instance from a received frame.
     ///
     /// The `Parse` argument provides a cursor-like API to read fields from the
