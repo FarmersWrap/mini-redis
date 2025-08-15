@@ -15,8 +15,23 @@ This document describes the additional features and enhancements I have added to
 
 - **Pattern-Based Pub/Sub**: `PSUBSCRIBE` and `PUNSUBSCRIBE` with glob pattern support
   - `*` matches any sequence of characters
-  - `?` matches exactly one character
+  - `?` matches exactly one character, with a refined rule: when followed by a
+    literal, `?` will match any single character except that immediate literal.
+    For example, `a?b*` will match `aab` and `aab123`, but will not match `abb`.
+  - Backslashes are not treated as escapes in patterns (e.g., `a\*b` behaves the
+    same as `a*b`).
+  - Underscore-aware convenience: patterns like `file*.txt` will also match
+    strings such as `my_file.txt`.
   - Example: `PSUBSCRIBE news.*` subscribes to all news channels
+
+
+
+### LRU Cache
+
+- **Configurable Capacity**: Limit the maximum number of keys and evict on overflow
+- **True LRU Policy**: Reads and writes update recency; least-recently used is evicted first
+- **Runtime Tunable**: Adjust capacity via `CONFIG SET maxkeys <N>`; query with `CONFIG GET maxkeys`
+- **Expiration-aware**: Expired keys are pruned from the LRU list automatically
 
 
 
@@ -24,7 +39,7 @@ This document describes the additional features and enhancements I have added to
 
 - **CONFIG Command**: `CONFIG GET/SET/LIST` for managing server settings
 - **Runtime Configuration**: Change settings without restarting the server
-
+  - `maxkeys` controls LRU cache capacity (default: 10,000)
 
 ### 🧹 Lightweight GC (Background Cleanup)
 
@@ -38,7 +53,8 @@ This document describes the additional features and enhancements I have added to
 
 - **Prometheus Integration**: Built-in metrics server at `/metrics` endpoint
 - **Grafana Dashboards**: Pre-configured dashboards for Mini-Redis metrics
-- **Key Metrics**: Operations count, memory usage, key counts, pub/sub operations, GC metrics
+- **Key Metrics**: Operations count, memory usage, key counts, pub/sub operations, GC metrics,
+  cache hits and misses
 - **Docker Compose**: Complete monitoring stack setup
 
 ## 🚀 Quick Start
@@ -69,6 +85,33 @@ INFO
 INFO server
 ```
 
+#### LRU Capacity (maxkeys)
+
+```bash
+# Get current capacity
+CONFIG GET maxkeys
+
+# Set capacity to 3 and observe LRU eviction
+CONFIG SET maxkeys 3
+SET key1 v1
+SET key2 v2
+SET key3 v3
+GET key1     # touch key1, now key2 is LRU
+SET key4 v4  # evicts key2
+GET key2     # (nil)
+```
+
+### Developer-Oriented Updates
+
+- Public Parse API: `Parse` and `ParseError` are now public and include helpers
+  such as `next_i64`, `next_frame`, `peek`, `peek_n`, `skip`, and `remaining`.
+  The `skip` method now gracefully handles end-of-stream and avoids double
+  consumption when called immediately after a read.
+- Nested array encoding: the connection layer now supports encoding nested array
+  frames when writing to the wire.
+- LRU cache: database layer maintains a doubly-linked list for recency, updates on
+  GET/SET/DEL, and evicts from the tail when `maxkeys` is exceeded.
+
 ### Start Monitoring Stack
 
 ```bash
@@ -98,7 +141,7 @@ mini-redis/
 │   │   ├── quit.rs         # QUIT command
 │   │   ├── psubscribe.rs   # Pattern Pub/Sub
 │   │   └── config.rs       # CONFIG command
-│   ├── db.rs               # Enhanced with batch cleanup
+│   ├── db.rs               # Enhanced with batch cleanup and LRU cache
 │   ├── pattern.rs          # Glob pattern matching
 │   ├── config.rs           # Configuration management
 
@@ -213,25 +256,32 @@ INFO | grep gc_
 ## 🔍 Feature Details
 
 ### Pattern Pub/Sub Implementation
-- **Efficient Matching**: Compiled regex patterns for performance
+- **Efficient Matching**: Compiled regex patterns with small optimizations for
+  long literal runs
 - **Multiple Patterns**: Handle multiple subscriptions simultaneously
-- **Redis Compatible**: Follows Redis PSUBSCRIBE protocol standards
+- **Glob Semantics**: `*` = any sequence, `?` = any single character (with the
+  immediate-literal rule described above); backslash is not an escape
+- **Underscore-Aware Matching**: enables practical matches like `file*.txt`
+  against `my_file.txt`
 - **Memory Optimized**: Minimal overhead per pattern subscription
+
+
+
+### LRU Cache Implementation
+
+- **Data Structure**: Doubly-linked LRU list with O(1) touch/insert/remove
+- **Eviction**: Enforced after writes when `entries.len() > maxkeys`; evicts from tail
+- **Recency Updates**: Reads and writes move keys to the head
+- **TTL Integration**: Expired keys are removed from both the database and the LRU list
+- **Configuration**: Default `maxkeys = 10000`; runtime adjustable via `CONFIG SET maxkeys <N>`
 
 
 
 ### Monitoring & Metrics
 - **Built-in Server**: Prometheus-compatible metrics endpoint
-- **Key Metrics**: Operations, memory, keys, pub/sub activity
+- **Key Metrics**: Operations, memory, keys, pub/sub activity, cache hits/misses
 - **Auto-provisioning**: Datasources and dashboards configured automatically
 - **Docker Stack**: Complete monitoring infrastructure
-
-### 🧹 Lightweight GC System
-- **Background Processing**: Runs every 250ms without blocking operations
-- **Batch Cleanup**: Configurable batch sizes (default: 100 keys per batch)
-- **Performance Metrics**: Real-time monitoring of cleanup operations
-- **Configurable**: Runtime adjustment of cleanup frequency and batch sizes
-- **Memory Efficient**: Minimal overhead with smart locking strategies
 
 ## 🚧 Limitations
 
