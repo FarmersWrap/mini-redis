@@ -4,10 +4,10 @@ use tokio::time::{self, Duration, Instant};
 use bytes::Bytes;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
-use tracing::debug;
+use crate::{Metrics, Pattern};
 
 /// A wrapper around a `Db` instance. This exists to allow orderly cleanup
-/// of the `Db` by signalling the background purge task to shut down when
+/// of the `Db` by signalling the background task to shut down when
 /// this struct is dropped.
 #[derive(Debug)]
 pub(crate) struct DbDropGuard {
@@ -55,6 +55,9 @@ struct Shared {
     /// task waits on this to be notified, then checks for expired values or the
     /// shutdown signal.
     background_task: Notify,
+
+    /// Metrics for tracking server operations
+    metrics: Arc<Metrics>,
 }
 
 #[derive(Debug)]
@@ -63,9 +66,21 @@ struct State {
     /// `std::collections::HashMap` works fine.
     entries: HashMap<String, Entry>,
 
+    /// LRU bookkeeping for key-value entries: doubly-linked list via key links.
+    /// `lru_head` is most-recently used, `lru_tail` is least-recently used.
+    lru_links: HashMap<String, (Option<String>, Option<String>)>,
+    lru_head: Option<String>,
+    lru_tail: Option<String>,
+
+    /// Maximum allowed number of keys in `entries`. When exceeded, evict LRU.
+    max_keys: usize,
+
     /// The pub/sub key-space. Redis uses a **separate** key space for key-value
     /// and pub/sub. `mini-redis` handles this by using a separate `HashMap`.
     pub_sub: HashMap<String, broadcast::Sender<Bytes>>,
+
+    /// Pattern-based subscriptions for PSUBSCRIBE
+    pattern_subscriptions: Vec<(Pattern, broadcast::Sender<Bytes>)>,
 
     /// Tracks key TTLs.
     ///
@@ -98,13 +113,14 @@ struct Entry {
 
 impl DbDropGuard {
     /// Create a new `DbDropGuard`, wrapping a `Db` instance. When this is dropped
-    /// the `Db`'s purge task will be shut down.
+    /// the background task will be shut down.
     pub(crate) fn new() -> DbDropGuard {
-        DbDropGuard { db: Db::new() }
+        let metrics = Arc::new(Metrics::new());
+        let db = Db::new(metrics.clone());
+        DbDropGuard { db }
     }
 
-    /// Get the shared database. Internally, this is an
-    /// `Arc`, so a clone only increments the ref count.
+    /// Get a reference to the `Db` instance.
     pub(crate) fn db(&self) -> Db {
         self.db.clone()
     }
@@ -112,258 +128,508 @@ impl DbDropGuard {
 
 impl Drop for DbDropGuard {
     fn drop(&mut self) {
-        // Signal the 'Db' instance to shut down the task that purges expired keys
+        // Signal the background task to shut down
         self.db.shutdown_purge_task();
     }
 }
 
 impl Db {
-    /// Create a new, empty, `Db` instance. Allocates shared state and spawns a
-    /// background task to manage key expiration.
-    pub(crate) fn new() -> Db {
+    /// Create a new `Db` instance with metrics.
+    pub(crate) fn new(metrics: Arc<Metrics>) -> Db {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 entries: HashMap::new(),
+                lru_links: HashMap::new(),
+                lru_head: None,
+                lru_tail: None,
+                max_keys: 10000, // Default max keys
                 pub_sub: HashMap::new(),
+                pattern_subscriptions: Vec::new(),
                 expirations: BTreeSet::new(),
                 shutdown: false,
             }),
             background_task: Notify::new(),
+            metrics,
         });
 
-        // Start the background task.
-        tokio::spawn(purge_expired_tasks(shared.clone()));
+        // Spawn the background task
+        tokio::spawn(purge_expired_tasks(Arc::clone(&shared)));
 
         Db { shared }
     }
 
-    /// Get the value associated with a key.
-    ///
-    /// Returns `None` if there is no value associated with the key. This may be
-    /// due to never having assigned a value to the key or a previously assigned
-    /// value expired.
-    pub(crate) fn get(&self, key: &str) -> Option<Bytes> {
-        // Acquire the lock, get the entry and clone the value.
-        //
-        // Because data is stored using `Bytes`, a clone here is a shallow
-        // clone. Data is not copied.
-        let state = self.shared.state.lock().unwrap();
-        state.entries.get(key).map(|entry| entry.data.clone())
+    /// Get the metrics instance
+    pub(crate) fn get_metrics(&self) -> Arc<Metrics> {
+        Arc::clone(&self.shared.metrics)
     }
 
-    /// Set the value associated with a key along with an optional expiration
-    /// Duration.
+    /// Get the value associated with a key.
     ///
-    /// If a value is already associated with the key, it is removed.
+    /// Returns `None` if the key does not exist.
+    pub(crate) fn get(&self, key: &str) -> Option<Bytes> {
+        let mut state = self.shared.state.lock().unwrap();
+
+        // Check if key exists and handle lazy expiration
+        if let Some(entry) = state.entries.get(key) {
+            if let Some(expires_at) = entry.expires_at {
+                if expires_at <= Instant::now() {
+                    // Expired: remove and return None
+                    state.entries.remove(key);
+                    state.expirations.remove(&(expires_at, key.to_string()));
+                    state.lru_remove_key(key);
+                    return None;
+                }
+            }
+
+            // Clone the data before touching LRU to avoid borrow conflicts
+            let data = entry.data.clone();
+
+            // Touch LRU (move to front)
+            state.lru_touch_front(key);
+
+            // Update metrics
+            self.shared.metrics.inc_get_hits();
+            self.shared.metrics.inc_ops_ok();
+
+            Some(data)
+        } else {
+            None
+        }
+    }
+
+    /// Set a key-value pair in the database.
+    ///
+    /// If a value already exists for the key, it is overwritten.
     pub(crate) fn set(&self, key: String, value: Bytes, expire: Option<Duration>) {
         let mut state = self.shared.state.lock().unwrap();
 
-        // If this `set` becomes the key that expires **next**, the background
-        // task needs to be notified so it can update its state.
-        //
-        // Whether or not the task needs to be notified is computed during the
-        // `set` routine.
-        let mut notify = false;
+        // Check if key already exists and get old expiration
+        let old_expires_at = state.entries.get(&key).and_then(|e| e.expires_at);
+        let key_exists = state.entries.contains_key(&key);
 
-        let expires_at = expire.map(|duration| {
-            // `Instant` at which the key expires.
-            let when = Instant::now() + duration;
-
-            // Only notify the worker task if the newly inserted expiration is the
-            // **next** key to evict. In this case, the worker needs to be woken up
-            // to update its state.
-            notify = state
-                .next_expiration()
-                .map(|expiration| expiration > when)
-                .unwrap_or(true);
-
-            when
-        });
-
-        // Insert the entry into the `HashMap`.
-        let prev = state.entries.insert(
-            key.clone(),
-            Entry {
-                data: value,
-                expires_at,
-            },
-        );
-
-        // If there was a value previously associated with the key **and** it
-        // had an expiration time. The associated entry in the `expirations` map
-        // must also be removed. This avoids leaking data.
-        if let Some(prev) = prev {
-            if let Some(when) = prev.expires_at {
-                // clear expiration
-                state.expirations.remove(&(when, key.clone()));
-            }
+        // Remove old expiration if it exists
+        if let Some(old_expires_at) = old_expires_at {
+            state.expirations.remove(&(old_expires_at, key.clone()));
         }
 
-        // Track the expiration. If we insert before remove that will cause bug
-        // when current `(when, key)` equals prev `(when, key)`. Remove then insert
-        // can avoid this.
-        if let Some(when) = expires_at {
-            state.expirations.insert((when, key));
+        // Create new entry
+        let expires_at = expire.map(|duration| Instant::now() + duration);
+        let entry = Entry {
+            data: value,
+            expires_at,
+        };
+
+        // Insert/update the entry
+        state.entries.insert(key.clone(), entry);
+
+        // Add to expirations if TTL is set
+        if let Some(expires_at) = expires_at {
+            state.expirations.insert((expires_at, key.clone()));
         }
 
-        // Release the mutex before notifying the background task. This helps
-        // reduce contention by avoiding the background task waking up only to
-        // be unable to acquire the mutex due to this function still holding it.
-        drop(state);
-
-        if notify {
-            // Finally, only notify the background task if it needs to update
-            // its state to reflect a new expiration.
-            self.shared.background_task.notify_one();
+        // Update LRU: move to front if exists, insert if new
+        if key_exists {
+            state.lru_touch_front(&key);
+        } else {
+            state.lru_insert_front(key.clone());
         }
+
+        // Enforce capacity by evicting LRU entries
+        state.evict_if_needed();
+
+        // Update metrics
+        self.shared.metrics.inc_ops_ok();
+        self.update_metrics(&state);
     }
 
-    /// Returns a `Receiver` for the requested channel.
+    /// Get the TTL for a key.
     ///
-    /// The returned `Receiver` is used to receive values broadcast by `PUBLISH`
-    /// commands.
-    pub(crate) fn subscribe(&self, key: String) -> broadcast::Receiver<Bytes> {
-        use std::collections::hash_map::Entry;
-
-        // Acquire the mutex
-        let mut state = self.shared.state.lock().unwrap();
-
-        // If there is no entry for the requested channel, then create a new
-        // broadcast channel and associate it with the key. If one already
-        // exists, return an associated receiver.
-        match state.pub_sub.entry(key) {
-            Entry::Occupied(e) => e.get().subscribe(),
-            Entry::Vacant(e) => {
-                // No broadcast channel exists yet, so create one.
-                //
-                // The channel is created with a capacity of `1024` messages. A
-                // message is stored in the channel until **all** subscribers
-                // have seen it. This means that a slow subscriber could result
-                // in messages being held indefinitely.
-                //
-                // When the channel's capacity fills up, publishing will result
-                // in old messages being dropped. This prevents slow consumers
-                // from blocking the entire system.
-                let (tx, rx) = broadcast::channel(1024);
-                e.insert(tx);
-                rx
-            }
-        }
-    }
-
-    /// Publish a message to the channel. Returns the number of subscribers
-    /// listening on the channel.
-    pub(crate) fn publish(&self, key: &str, value: Bytes) -> usize {
+    /// Returns `None` if the key does not exist or has no TTL.
+    pub(crate) fn ttl(&self, key: &str) -> Option<Duration> {
         let state = self.shared.state.lock().unwrap();
+        let entry = state.entries.get(key)?;
 
-        state
-            .pub_sub
-            .get(key)
-            // On a successful message send on the broadcast channel, the number
-            // of subscribers is returned. An error indicates there are no
-            // receivers, in which case, `0` should be returned.
-            .map(|tx| tx.send(value).unwrap_or(0))
-            // If there is no entry for the channel key, then there are no
-            // subscribers. In this case, return `0`.
-            .unwrap_or(0)
-    }
-
-    /// Signals the purge background task to shut down. This is called by the
-    /// `DbShutdown`s `Drop` implementation.
-    fn shutdown_purge_task(&self) {
-        // The background task must be signaled to shut down. This is done by
-        // setting `State::shutdown` to `true` and signalling the task.
-        let mut state = self.shared.state.lock().unwrap();
-        state.shutdown = true;
-
-        // Drop the lock before signalling the background task. This helps
-        // reduce lock contention by ensuring the background task doesn't
-        // wake up only to be unable to acquire the mutex.
-        drop(state);
-        self.shared.background_task.notify_one();
-    }
-}
-
-impl Shared {
-    /// Purge all expired keys and return the `Instant` at which the **next**
-    /// key will expire. The background task will sleep until this instant.
-    fn purge_expired_keys(&self) -> Option<Instant> {
-        let mut state = self.state.lock().unwrap();
-
-        if state.shutdown {
-            // The database is shutting down. All handles to the shared state
-            // have dropped. The background task should exit.
-            return None;
-        }
-
-        // This is needed to make the borrow checker happy. In short, `lock()`
-        // returns a `MutexGuard` and not a `&mut State`. The borrow checker is
-        // not able to see "through" the mutex guard and determine that it is
-        // safe to access both `state.expirations` and `state.entries` mutably,
-        // so we get a "real" mutable reference to `State` outside of the loop.
-        let state = &mut *state;
-
-        // Find all keys scheduled to expire **before** now.
-        let now = Instant::now();
-
-        while let Some(&(when, ref key)) = state.expirations.iter().next() {
-            if when > now {
-                // Done purging, `when` is the instant at which the next key
-                // expires. The worker task will wait until this instant.
-                return Some(when);
+        // Check if the entry has expired
+        if let Some(expires_at) = entry.expires_at {
+            if expires_at <= Instant::now() {
+                return None;
             }
-
-            // The key expired, remove it
-            state.entries.remove(key);
-            state.expirations.remove(&(when, key.clone()));
+            return Some(expires_at - Instant::now());
         }
+
+        // Update metrics
+        self.shared.metrics.inc_ops_ok();
 
         None
     }
 
-    /// Returns `true` if the database is shutting down
+    /// Check if a key exists in the database.
     ///
-    /// The `shutdown` flag is set when all `Db` values have dropped, indicating
-    /// that the shared state can no longer be accessed.
+    /// Returns `false` if the key does not exist or has expired.
+    pub(crate) fn contains_key(&self, key: &str) -> bool {
+        let mut state = self.shared.state.lock().unwrap();
+        if let Some(entry) = state.entries.get(key) {
+            // Check if the entry has expired
+            if let Some(expires_at) = entry.expires_at {
+                if expires_at <= Instant::now() {
+                    // Remove expired entry
+                    state.entries.remove(key);
+                    state.expirations.remove(&(expires_at, key.to_string()));
+                    state.lru_remove_key(key);
+                    return false;
+                }
+            }
+            // Update metrics
+            self.shared.metrics.inc_ops_ok();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set the maximum allowed number of keys in the key-value store.
+    pub(crate) fn set_max_keys(&self, max: usize) {
+        let mut state = self.shared.state.lock().unwrap();
+        state.max_keys = max;
+        state.evict_if_needed();
+    }
+
+    /// Get the configured maximum number of keys.
+    pub(crate) fn get_max_keys(&self) -> usize {
+        let state = self.shared.state.lock().unwrap();
+        state.max_keys
+    }
+
+    /// Subscribe to a channel.
+    ///
+    /// Returns a receiver that will receive messages published to the channel.
+    pub(crate) fn subscribe(&self, key: String) -> broadcast::Receiver<Bytes> {
+        let mut state = self.shared.state.lock().unwrap();
+
+        // Get or create the channel
+        let sender = state.pub_sub.entry(key.clone()).or_insert_with(|| {
+            let (tx, _) = broadcast::channel(1024);
+            tx
+        });
+
+        // Update metrics
+        self.shared.metrics.inc_sub_count();
+        self.shared.metrics.inc_ops_ok();
+
+        sender.subscribe()
+    }
+
+    /// Subscribe to a pattern.
+    ///
+    /// Returns a receiver that will receive messages published to channels matching the pattern.
+    pub(crate) fn psubscribe(&self, pattern: String) -> broadcast::Receiver<Bytes> {
+        let mut state = self.shared.state.lock().unwrap();
+
+        // Compile the pattern
+        let pattern = match Pattern::new(&pattern) {
+            Ok(p) => p,
+            Err(_) => {
+                // If pattern compilation fails, create a channel that will never receive messages
+                let (_tx, rx) = broadcast::channel(1);
+                return rx;
+            }
+        };
+
+        // Create a new channel for this pattern
+        let (tx, rx) = broadcast::channel(1024);
+        state.pattern_subscriptions.push((pattern, tx));
+
+        // Update metrics
+        self.shared.metrics.inc_sub_count();
+        self.shared.metrics.inc_ops_ok();
+
+        rx
+    }
+
+    /// Publish a message to a channel.
+    ///
+    /// Returns the number of subscribers that received the message.
+    pub(crate) fn publish(&self, key: &str, value: Bytes) -> usize {
+        let state = self.shared.state.lock().unwrap();
+
+        // Get the channel
+        let sender = state.pub_sub.get(key);
+        let mut total_recipients = 0;
+
+        // Update metrics
+        self.shared.metrics.inc_pub_count();
+        self.shared.metrics.inc_ops_ok();
+
+        // Send the message to exact channel subscribers
+        if let Some(sender) = sender {
+            total_recipients += sender.send(value.clone()).unwrap_or(0);
+        }
+
+        // Send the message to pattern subscribers
+        for (pattern, sender) in &state.pattern_subscriptions {
+            if pattern.matches(key) {
+                // Clone the value for each pattern subscriber
+                let _ = sender.send(value.clone());
+                total_recipients += 1;
+            }
+        }
+
+        total_recipients
+    }
+
+    /// Shutdown the background purge task.
+    fn shutdown_purge_task(&self) {
+        let mut state = self.shared.state.lock().unwrap();
+        state.shutdown = true;
+        self.shared.background_task.notify_one();
+    }
+
+    /// Update metrics based on current state
+    fn update_metrics(&self, state: &State) {
+        let key_count = state.entries.len() as u64;
+        let mut total_memory = 0u64;
+
+        // Calculate approximate memory usage
+        for (key, entry) in &state.entries {
+            total_memory += key.len() as u64 + entry.data.len() as u64;
+        }
+
+        self.shared.metrics.set_keys(key_count);
+        self.shared.metrics.set_mem_bytes(total_memory);
+    }
+
+    /// Clean up expired keys in batches (for GC task)
+    ///
+    /// This method is designed to be called by the background GC task
+    /// and processes expired keys in small batches to avoid blocking.
+    ///
+    /// Returns the number of keys that were cleaned up.
+    pub(crate) async fn cleanup_expired_keys_batch(&self, batch_size: usize) -> usize {
+        let mut cleaned_count = 0;
+        let now = Instant::now();
+
+        // Get a lock on the state
+        let mut state = self.shared.state.lock().unwrap();
+
+        // Find expired keys up to the batch size
+        let mut expired_keys = Vec::new();
+        for &(expires_at, ref key) in &state.expirations {
+            if expires_at <= now {
+                expired_keys.push(key.clone());
+                if expired_keys.len() >= batch_size {
+                    break;
+                }
+            } else {
+                // Keys are sorted by expiration time, so we can stop here
+                break;
+            }
+        }
+
+        // Remove expired keys
+        for key in &expired_keys {
+            if let Some(entry) = state.entries.remove(key) {
+                // Remove from expirations
+                if let Some(expires_at) = entry.expires_at {
+                    state.expirations.remove(&(expires_at, key.clone()));
+                }
+
+                cleaned_count += 1;
+
+                // Note: Keyspace notifications were removed from this implementation
+            }
+        }
+
+        // Update metrics
+        if cleaned_count > 0 {
+            self.shared.metrics.set_keys(state.entries.len() as u64);
+
+            // Remove from LRU as well
+            for key in &expired_keys {
+                state.lru_remove_key(key);
+            }
+
+            // Recalculate memory usage
+            let mut total_memory = 0u64;
+            for (key, entry) in &state.entries {
+                total_memory += key.len() as u64 + entry.data.len() as u64;
+            }
+            self.shared.metrics.set_mem_bytes(total_memory);
+        }
+
+        cleaned_count
+    }
+}
+
+impl Shared {
+    /// Purge expired keys from the database.
+    ///
+    /// Returns the next expiration time, if any.
+    fn purge_expired_keys(&self) -> Option<Instant> {
+        let mut state = self.state.lock().unwrap();
+        let now = Instant::now();
+
+        // Find expired keys
+        let mut expired_keys = Vec::new();
+        for &(expires_at, ref key) in &state.expirations {
+            if expires_at <= now {
+                expired_keys.push(key.clone());
+            } else {
+                // Keys are sorted by expiration time, so we can stop here
+                break;
+            }
+        }
+
+        // Remove expired keys
+        for key in &expired_keys {
+            state.entries.remove(key);
+            // Note: We don't remove from expirations here as we'll do it in the loop above
+        }
+
+        // Remove expired entries from expirations
+        state.expirations.retain(|&(expires_at, _)| expires_at > now);
+
+        // Remove expired keys from LRU
+        for key in &expired_keys {
+            state.lru_remove_key(key);
+        }
+
+        // Update metrics
+        self.metrics.set_keys(state.entries.len() as u64);
+
+        // Recalculate memory usage
+        let mut total_memory = 0u64;
+        for (key, entry) in &state.entries {
+            total_memory += key.len() as u64 + entry.data.len() as u64;
+        }
+        self.metrics.set_mem_bytes(total_memory);
+
+        // Return the next expiration time
+        state.expirations.iter().next().map(|&(expires_at, _)| expires_at)
+    }
+
+    /// Check if the database is shutting down.
     fn is_shutdown(&self) -> bool {
-        self.state.lock().unwrap().shutdown
+        let state = self.state.lock().unwrap();
+        state.shutdown
     }
 }
 
 impl State {
-    fn next_expiration(&self) -> Option<Instant> {
-        self.expirations
-            .iter()
-            .next()
-            .map(|expiration| expiration.0)
+    /// Touch a key in LRU (move to front)
+    fn lru_touch_front(&mut self, key: &str) {
+        if !self.lru_links.contains_key(key) {
+            // Not in list, insert as front
+            self.lru_insert_front(key.to_string());
+            return;
+        }
+        // Remove then insert at front
+        self.lru_remove_key(key);
+        self.lru_insert_front(key.to_string());
     }
-}
 
-/// Routine executed by the background task.
-///
-/// Wait to be notified. On notification, purge any expired keys from the shared
-/// state handle. If `shutdown` is set, terminate the task.
-async fn purge_expired_tasks(shared: Arc<Shared>) {
-    // If the shutdown flag is set, then the task should exit.
-    while !shared.is_shutdown() {
-        // Purge all keys that are expired. The function returns the instant at
-        // which the **next** key will expire. The worker should wait until the
-        // instant has passed then purge again.
-        if let Some(when) = shared.purge_expired_keys() {
-            // Wait until the next key expires **or** until the background task
-            // is notified. If the task is notified, then it must reload its
-            // state as new keys have been set to expire early. This is done by
-            // looping.
-            tokio::select! {
-                _ = time::sleep_until(when) => {}
-                _ = shared.background_task.notified() => {}
+    /// Insert a new key at the front of LRU
+    fn lru_insert_front(&mut self, key: String) {
+        let old_head = self.lru_head.take();
+        // New node: prev=None, next=old_head
+        self.lru_links.insert(key.clone(), (None, old_head.clone()));
+        if let Some(head_key) = old_head {
+            if let Some((ref mut prev, _next)) = self.lru_links.get_mut(&head_key) {
+                *prev = Some(key.clone());
             }
-        } else {
-            // There are no keys expiring in the future. Wait until the task is
-            // notified.
-            shared.background_task.notified().await;
+        }
+        if self.lru_tail.is_none() {
+            self.lru_tail = Some(key.clone());
+        }
+        self.lru_head = Some(key);
+    }
+
+    /// Remove a key from LRU
+    fn lru_remove_key(&mut self, key: &str) {
+        if let Some((prev, next)) = self.lru_links.remove(key) {
+            match (prev, next) {
+                (Some(prev_key), Some(next_key)) => {
+                    // Middle node: update neighbors
+                    if let Some((_p, ref mut n)) = self.lru_links.get_mut(&prev_key) {
+                        *n = Some(next_key.clone());
+                    }
+                    if let Some((ref mut p, _n)) = self.lru_links.get_mut(&next_key) {
+                        *p = Some(prev_key);
+                    }
+                }
+                (Some(prev_key), None) => {
+                    // Removing tail: update previous node and tail pointer
+                    if let Some((_p, ref mut n)) = self.lru_links.get_mut(&prev_key) {
+                        *n = None;
+                    }
+                    if self.lru_tail.as_deref() == Some(key) {
+                        self.lru_tail = Some(prev_key);
+                    }
+                }
+                (None, Some(next_key)) => {
+                    // Removing head: update next node and head pointer
+                    if let Some((ref mut p, _n)) = self.lru_links.get_mut(&next_key) {
+                        *p = None;
+                    }
+                    if self.lru_head.as_deref() == Some(key) {
+                        self.lru_head = Some(next_key);
+                    }
+                }
+                (None, None) => {
+                    // Single element: clear head and tail
+                    if self.lru_head.as_deref() == Some(key) {
+                        self.lru_head = None;
+                    }
+                    if self.lru_tail.as_deref() == Some(key) {
+                        self.lru_tail = None;
+                    }
+                }
+            }
         }
     }
 
-    debug!("Purge background task shut down")
+    /// Evict least-recently used entries if capacity exceeded
+    fn evict_if_needed(&mut self) {
+        while self.entries.len() > self.max_keys {
+            // Evict least-recently used (tail)
+            let victim = match self.lru_tail.clone() {
+                Some(k) => k,
+                None => break,
+            };
+
+            // Remove from entries
+            if let Some(entry) = self.entries.remove(&victim) {
+                if let Some(when) = entry.expires_at {
+                    self.expirations.remove(&(when, victim.clone()));
+                }
+            }
+
+            // Remove from LRU
+            self.lru_remove_key(&victim);
+        }
+    }
+}
+
+/// Background task that purges expired keys.
+async fn purge_expired_tasks(shared: Arc<Shared>) {
+    while !shared.is_shutdown() {
+        // Wait for the next expiration or shutdown notification
+        if let Some(next_expiration) = shared.purge_expired_keys() {
+            let now = Instant::now();
+            if next_expiration > now {
+                let duration = next_expiration - now;
+                tokio::select! {
+                    _ = time::sleep(duration) => {
+                        // Continue to next iteration
+                    }
+                    _ = shared.background_task.notified() => {
+                        // Shutdown requested
+                        break;
+                    }
+                }
+            }
+        } else {
+            // No expirations, wait for shutdown notification
+            shared.background_task.notified().await;
+        }
+    }
 }

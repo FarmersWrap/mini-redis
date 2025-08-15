@@ -9,11 +9,11 @@ use std::num::TryFromIntError;
 use std::string::FromUtf8Error;
 
 /// A frame in the Redis protocol.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame {
     Simple(String),
     Error(String),
-    Integer(u64),
+    Integer(i64),
     Bulk(Bytes),
     Null,
     Array(Vec<Frame>),
@@ -56,11 +56,13 @@ impl Frame {
     pub(crate) fn push_int(&mut self, value: u64) {
         match self {
             Frame::Array(vec) => {
-                vec.push(Frame::Integer(value));
+                vec.push(Frame::Integer(value as i64));
             }
             _ => panic!("not an array frame"),
         }
     }
+
+
 
     /// Checks if an entire message can be decoded from `src`
     pub fn check(src: &mut Cursor<&[u8]>) -> Result<(), Error> {
@@ -74,7 +76,7 @@ impl Frame {
                 Ok(())
             }
             b':' => {
-                let _ = get_decimal(src)?;
+                let _ = get_signed_decimal(src)?;
                 Ok(())
             }
             b'$' => {
@@ -124,7 +126,7 @@ impl Frame {
                 Ok(Frame::Error(string))
             }
             b':' => {
-                let len = get_decimal(src)?;
+                let len = get_signed_decimal(src)?;
                 Ok(Frame::Integer(len))
             }
             b'$' => {
@@ -163,7 +165,7 @@ impl Frame {
 
                 Ok(Frame::Array(out))
             }
-            _ => unimplemented!(),
+            _ => return Err("protocol error; invalid frame type".into()),
         }
     }
 
@@ -189,7 +191,7 @@ impl fmt::Display for Frame {
 
         match self {
             Frame::Simple(response) => response.fmt(fmt),
-            Frame::Error(msg) => write!(fmt, "error: {}", msg),
+            Frame::Error(msg) => write!(fmt, "{}", msg),
             Frame::Integer(num) => num.fmt(fmt),
             Frame::Bulk(msg) => match str::from_utf8(msg) {
                 Ok(string) => string.fmt(fmt),
@@ -197,16 +199,14 @@ impl fmt::Display for Frame {
             },
             Frame::Null => "(nil)".fmt(fmt),
             Frame::Array(parts) => {
+                write!(fmt, "[")?;
                 for (i, part) in parts.iter().enumerate() {
                     if i > 0 {
-                        // use space as the array element display separator
-                        write!(fmt, " ")?;
+                        write!(fmt, ", ")?;
                     }
-
-                    part.fmt(fmt)?;
+                    write!(fmt, "{}", part)?;
                 }
-
-                Ok(())
+                write!(fmt, "]")
             }
         }
     }
@@ -244,6 +244,15 @@ fn get_decimal(src: &mut Cursor<&[u8]>) -> Result<u64, Error> {
     let line = get_line(src)?;
 
     atoi::<u64>(line).ok_or_else(|| "protocol error; invalid frame format".into())
+}
+
+/// Read a new-line terminated signed decimal
+fn get_signed_decimal(src: &mut Cursor<&[u8]>) -> Result<i64, Error> {
+    use atoi::atoi;
+
+    let line = get_line(src)?;
+
+    atoi::<i64>(line).ok_or_else(|| "protocol error; invalid frame format".into())
 }
 
 /// Find a line
