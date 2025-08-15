@@ -147,24 +147,67 @@ scripts/run-mini-redis.sh
 
 ```
 mini-redis/
+├── Cargo.toml
+├── docker-compose.yml
 ├── src/
+│   ├── bin/
+│   │   ├── server.rs            # Binary: mini-redis-server
+│   │   └── cli.rs               # Binary: mini-redis-cli
+│   ├── clients/
+│   │   ├── blocking_client.rs
+│   │   ├── buffered_client.rs
+│   │   └── client.rs
+│   ├── clients.rs               # Client module re-exports
 │   ├── cmd/
-│   │   ├── ttl.rs          # TTL and PTTL commands
-│   │   ├── info.rs         # INFO command
-│   │   ├── del.rs          # DEL command
-│   │   ├── quit.rs         # QUIT command
-│   │   ├── psubscribe.rs   # Pattern Pub/Sub
-│   │   └── config.rs       # CONFIG command
-│   ├── db.rs               # Enhanced with batch cleanup and LRU cache
-│   ├── pattern.rs          # Glob pattern matching
-│   ├── config.rs           # Configuration management
-│   ├── gc_config.rs        # GC configuration management
-│   ├── gc_task.rs          # Background garbage collection task
-│   └── metrics_server.rs   # Prometheus metrics endpoint
-├── dashboards/              # Grafana dashboards
-├── prometheus/              # Prometheus configuration
-├── docs/                    # Feature documentation
-└── scripts/                 # Utility scripts (moved here)
+│   │   ├── config.rs
+│   │   ├── gc.rs
+│   │   ├── get.rs
+│   │   ├── info.rs
+│   │   ├── ping.rs
+│   │   ├── psubscribe.rs
+│   │   ├── publish.rs
+│   │   ├── quit.rs
+│   │   ├── set.rs
+│   │   ├── subscribe.rs
+│   │   ├── ttl.rs
+│   │   └── unknown.rs
+│   ├── cmd.rs
+│   ├── connection.rs
+│   ├── db.rs                    # LRU + expiration + shared state
+│   ├── frame.rs
+│   ├── gc_config.rs
+│   ├── gc_task.rs
+│   ├── lib.rs
+│   ├── metrics.rs
+│   ├── metrics_server.rs
+│   ├── parse.rs
+│   ├── pattern.rs               # Glob pattern matching
+│   ├── server.rs
+│   └── shutdown.rs
+├── dashboards/                  # Grafana dashboards
+│   ├── datasources/
+│   │   └── prometheus.yml
+│   ├── provisioning/
+│   │   └── dashboards.yml
+│   └── mini-redis-dashboard.json
+├── prometheus/                  # Prometheus configuration
+│   └── prometheus.yml
+├── docs/                        # Feature documentation
+│   ├── LIGHTWEIGHT_GC_README.md
+│   ├── MONITORING_README.md
+│   ├── ORIGINAL_README.md
+│   └── PATTERN_PUBSUB_README.md
+├── scripts/                     # Utility scripts
+│   ├── setup-complete.sh
+│   ├── start-monitoring.sh
+│   ├── run-mini-redis.sh
+│   └── stop-all.sh
+├── examples/                    # Example programs
+│   ├── chat.rs
+│   ├── hello_world.rs
+│   ├── pub.rs
+│   └── sub.rs
+└── tests/                       # Integration tests
 ```
 
 ## Testing
