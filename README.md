@@ -1,6 +1,21 @@
-# Mini-Redis (Enhanced)
+# Mini-Redis
 
 Enhanced Mini-Redis with pattern Pub/Sub, LRU cache, background GC, and metrics.
+
+### Original mini-redis at a glance
+
+- Learning-focused Redis client/server built with Tokio (not for production)
+- Components: server, async client library, CLI, and examples
+- Supported baseline commands: PING, GET, SET, PUBLISH, SUBSCRIBE
+- Core patterns demonstrated:
+  - TCP server with per-connection tasks
+  - Protocol framing via `Connection` and `Frame`
+  - Shared state in `Db` across connections
+  - Graceful shutdown using signals
+  - Concurrency limiting using a semaphore
+  - Pub/Sub using broadcast channels and `StreamMap`
+  - `std::sync::Mutex` use in async context where appropriate
+  - Time-based testing with Tokio time control
 
 ## Features
 
@@ -116,11 +131,11 @@ GET key2     # (nil)
 
 ```bash
 # Start everything at once
-./setup-complete.sh
+scripts/setup-complete.sh
 
 # Or individually
-./start-monitoring.sh
-./run-mini-redis.sh
+scripts/start-monitoring.sh
+scripts/run-mini-redis.sh
 
 # Access services
 # Mini-Redis: localhost:6379
