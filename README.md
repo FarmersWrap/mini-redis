@@ -15,18 +15,17 @@ Enhanced Mini-Redis with pattern Pub/Sub, LRU cache, background GC, and metrics.
   - Concurrency limiting using a semaphore
   - Pub/Sub using broadcast channels and `StreamMap`
   - `std::sync::Mutex` use in async context where appropriate
-  - Time-based testing with Tokio time control
 
-## Features
+## New Features
 
-### Core Redis Commands
+### Redis Commands
 
 - **TTL & PTTL**: `TTL` and `PTTL` commands for checking key expiration times
 - **INFO**: `INFO` command for server information and statistics
 - **DEL**: `DEL` command for deleting keys
 - **QUIT**: `QUIT` command for graceful connection termination
 
-### Pub/Sub (with Patterns)
+### Pattern Pub/Sub
 
 - **Pattern-Based Pub/Sub**: `PSUBSCRIBE` and `PUNSUBSCRIBE` with glob pattern support
   - `*` matches any sequence of characters
@@ -41,7 +40,7 @@ Enhanced Mini-Redis with pattern Pub/Sub, LRU cache, background GC, and metrics.
 
 
 
-### LRU Cache
+### Configurable LRU Cache
 
 - **Configurable Capacity**: Limit the maximum number of keys and evict on overflow
 - **True LRU Policy**: Reads and writes update recency; least-recently used is evicted first
@@ -56,7 +55,7 @@ Enhanced Mini-Redis with pattern Pub/Sub, LRU cache, background GC, and metrics.
 - **Runtime Configuration**: Change settings without restarting the server
   - `maxkeys` controls LRU cache capacity (default: 10,000)
 
-### GC (Background Cleanup)
+### Garbage Collector
 
 - **Background Garbage Collection**: Automatic cleanup of expired keys every 250ms
 - **Batch Processing**: Configurable batch sizes (default: 100 keys per batch)
@@ -159,7 +158,6 @@ mini-redis/
 │   ├── db.rs               # Enhanced with batch cleanup and LRU cache
 │   ├── pattern.rs          # Glob pattern matching
 │   ├── config.rs           # Configuration management
-
 │   ├── gc_config.rs        # GC configuration management
 │   ├── gc_task.rs          # Background garbage collection task
 │   └── metrics_server.rs   # Prometheus metrics endpoint
@@ -191,9 +189,6 @@ curl -s http://localhost:9123/metrics | grep -E "(gc_cleanup|gc_duration)"
 # Start server in one terminal, then in another:
 # Subscribe: mini-redis-cli psubscribe "news.*"
 # Publish:   mini-redis-cli publish news.sports "Hello"
-
-
-
 # Monitoring
 scripts/start-monitoring.sh
 ```
@@ -212,16 +207,6 @@ scripts/start-monitoring.sh
 - `scripts/start-monitoring.sh` - Start monitoring stack
 - `scripts/run-mini-redis.sh` - Run server with metrics
 - `scripts/stop-all.sh` - Stop all services
-
-## Key Enhancements
-
-1. **Extended Command Set**: Added missing Redis commands for better compatibility
-2. **Pattern Pub/Sub**: Advanced subscription patterns with efficient regex matching
-
-4. **Configuration Management**: Runtime server configuration
-5. **🧹 Lightweight GC**: Background garbage collection with configurable cleanup
-6. **Monitoring Stack**: Complete observability with Prometheus and Grafana
-7. **Production Ready**: Proper error handling, testing, and documentation
 
 ## Usage Examples
 
@@ -300,12 +285,9 @@ INFO | grep gc_
 
 Potential improvements could include:
 
-- **Advanced Patterns**: Regex support, character classes
 - **Event Types**: RENAME, EXPIRE, and other Redis events
 - **Multi-database**: Support for multiple databases
 - **Event Filtering**: Pattern-based event filtering
-- **Performance**: Pattern indexing and optimization
-- **Persistence**: Event and pattern persistence
 
 ## 🎯 Use Cases
 
@@ -318,5 +300,3 @@ These enhancements enable:
 - **Production Monitoring**: Operational visibility and performance tracking
 
 ---
-
-*This README documents the specific enhancements I have contributed to the Mini-Redis project. All features are production-ready and follow Rust best practices.*
