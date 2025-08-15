@@ -1,6 +1,6 @@
 # Mini-Redis (Enhanced)
 
-Production-grade Mini-Redis with pattern Pub/Sub, LRU cache, background GC, and metrics.
+Enhanced Mini-Redis with pattern Pub/Sub, LRU cache, background GC, and metrics.
 
 ## Features
 
