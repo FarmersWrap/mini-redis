@@ -128,16 +128,20 @@ gc_duration_avg_ms:15
 
 ## 🧪 **Testing & Validation**
 
-### **Test Script**
+### **Testing Options**
 
-Use the provided test script to validate GC functionality:
+Use the Rust integration tests or run a quick manual validation:
 
 ```bash
-# Make executable
-chmod +x test-gc.sh
+# Start server with metrics
+cargo run --release --bin mini-redis-server -- --metrics-port 9123 &
 
-# Run comprehensive GC test
-./test-gc.sh
+# In another terminal, create expiring keys
+cargo run --release --bin mini-redis-cli -- set "test1" "value1" EX 2
+cargo run --release --bin mini-redis-cli -- set "test2" "value2" EX 3
+
+# Observe GC metrics
+curl -s http://localhost:9123/metrics | grep gc_
 ```
 
 ### **What the Test Validates**
@@ -174,10 +178,10 @@ cargo run --release --bin mini-redis-cli -- info keyspace
 pub(crate) async fn cleanup_expired_keys_batch(&self, batch_size: usize) -> usize {
     let mut cleaned_count = 0;
     let now = Instant::now();
-    
+
     // Get lock on database state
     let mut state = self.shared.state.lock().unwrap();
-    
+
     // Find expired keys up to batch size
     let mut expired_keys = Vec::new();
     for &(expires_at, ref key) in &state.expirations {
@@ -191,7 +195,7 @@ pub(crate) async fn cleanup_expired_keys_batch(&self, batch_size: usize) -> usiz
             break;
         }
     }
-    
+
     // Remove expired keys and update metrics
     for key in expired_keys {
         if let Some(entry) = state.entries.remove(&key) {
@@ -201,7 +205,7 @@ pub(crate) async fn cleanup_expired_keys_batch(&self, batch_size: usize) -> usiz
             cleaned_count += 1;
         }
     }
-    
+
     cleaned_count
 }
 ```
@@ -211,14 +215,14 @@ pub(crate) async fn cleanup_expired_keys_batch(&self, batch_size: usize) -> usiz
 ```rust
 async fn gc_loop(db: Arc<Db>, config: GcConfig) {
     let mut interval_timer = interval(config.cleanup_interval);
-    
+
     loop {
         interval_timer.tick().await;
-        
+
         let start_time = Instant::now();
         let cleaned_count = Self::cleanup_expired_keys(&db, config.batch_size).await;
         let duration = start_time.elapsed();
-        
+
         if cleaned_count > 0 {
             info!("GC cleaned {} expired keys in {:?}", cleaned_count, duration);
         }
@@ -291,7 +295,7 @@ groups:
           severity: warning
         annotations:
           summary: "GC cleanup is taking too long"
-          
+
       - alert: GCNotRunning
         expr: increase(mini_redis_gc_cleanup_count[5m]) == 0
         for: 1m
@@ -376,4 +380,4 @@ The lightweight GC system is designed to be extensible and maintainable. Contrib
 
 ---
 
-**🎉 The lightweight GC system transforms Mini-Redis from a simple key-value store into a production-ready, high-performance database with intelligent background maintenance!** 
+**🎉 The lightweight GC system transforms Mini-Redis from a simple key-value store into a production-ready, high-performance database with intelligent background maintenance!**

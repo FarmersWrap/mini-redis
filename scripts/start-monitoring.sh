@@ -20,4 +20,6 @@ echo "  Prometheus: http://localhost:9090"
 echo "  Grafana:    http://localhost:3000 (admin/admin)"
 echo ""
 echo "To stop the stack, run: docker-compose down"
-echo "To view logs, run: docker-compose logs -f" 
+echo "To view logs, run: docker-compose logs -f"
+
+

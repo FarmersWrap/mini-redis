@@ -1,8 +1,8 @@
-# Mini-Redis - Enhanced Features
+# Mini-Redis (Enhanced)
 
-This document describes the additional features and enhancements I have added to the Mini-Redis project.
+Production-grade Mini-Redis with pattern Pub/Sub, LRU cache, background GC, and metrics.
 
-## 🆕 New Features Added
+## Features
 
 ### Core Redis Commands
 
@@ -11,7 +11,7 @@ This document describes the additional features and enhancements I have added to
 - **DEL**: `DEL` command for deleting keys
 - **QUIT**: `QUIT` command for graceful connection termination
 
-### Advanced Pub/Sub
+### Pub/Sub (with Patterns)
 
 - **Pattern-Based Pub/Sub**: `PSUBSCRIBE` and `PUNSUBSCRIBE` with glob pattern support
   - `*` matches any sequence of characters
@@ -41,7 +41,7 @@ This document describes the additional features and enhancements I have added to
 - **Runtime Configuration**: Change settings without restarting the server
   - `maxkeys` controls LRU cache capacity (default: 10,000)
 
-### 🧹 Lightweight GC (Background Cleanup)
+### GC (Background Cleanup)
 
 - **Background Garbage Collection**: Automatic cleanup of expired keys every 250ms
 - **Batch Processing**: Configurable batch sizes (default: 100 keys per batch)
@@ -57,16 +57,16 @@ This document describes the additional features and enhancements I have added to
   cache hits and misses
 - **Docker Compose**: Complete monitoring stack setup
 
-## 🚀 Quick Start
+## Quick Start
 
-### Start the Enhanced Server
+### Start the Server
 
 ```bash
 # Build and run with metrics enabled
 cargo run --release --bin mini-redis-server -- --metrics-port 9123
 ```
 
-### Test New Commands
+### Try It
 
 ```bash
 # TTL operations
@@ -101,7 +101,7 @@ SET key4 v4  # evicts key2
 GET key2     # (nil)
 ```
 
-### Developer-Oriented Updates
+### Developer Notes
 
 - Public Parse API: `Parse` and `ParseError` are now public and include helpers
   such as `next_i64`, `next_frame`, `peek`, `peek_n`, `skip`, and `remaining`.
@@ -129,7 +129,7 @@ GET key2     # (nil)
 # Grafana: http://localhost:3000 (admin/admin)
 ```
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 mini-redis/
@@ -151,10 +151,10 @@ mini-redis/
 ├── dashboards/              # Grafana dashboards
 ├── prometheus/              # Prometheus configuration
 ├── docs/                    # Feature documentation
-└── scripts/                 # Utility scripts
+└── scripts/                 # Utility scripts (moved here)
 ```
 
-## 🧪 Testing
+## Testing
 
 ### Run All Tests
 
@@ -162,32 +162,28 @@ mini-redis/
 cargo test
 ```
 
-### Test Lightweight GC
+### Observe GC
 
 ```bash
-# Test the background garbage collection system
-./test-gc.sh
-
-# This script demonstrates:
-# - Background GC operation every 250ms
-# - Batch processing of expired keys
-# - Real-time metrics collection
-# - Performance under load
+# GC runs automatically in the background; observe via metrics
+curl -s http://localhost:9123/metrics | grep -E "(gc_cleanup|gc_duration)"
 ```
 
-### Test Specific Features
+### Manual Demos
 
 ```bash
-# Pattern Pub/Sub
-./test-pattern-pubsub.sh
+# Pattern Pub/Sub (manual)
+# Start server in one terminal, then in another:
+# Subscribe: mini-redis-cli psubscribe "news.*"
+# Publish:   mini-redis-cli publish news.sports "Hello"
 
 
 
 # Monitoring
-./start-monitoring.sh
+scripts/start-monitoring.sh
 ```
 
-## 📚 Documentation
+## Documentation
 
 > 📚 **Documentation**: All feature guides are now organized in the [`docs/`](docs/) directory for easy navigation.
 
@@ -195,17 +191,14 @@ cargo test
 
 - **[Monitoring Setup](docs/MONITORING_README.md)** - Prometheus & Grafana configuration
 
-## 🔧 Scripts Added
+## Scripts
 
-- `setup-complete.sh` - Start all services
-- `start-monitoring.sh` - Start monitoring stack
-- `run-mini-redis.sh` - Run server with metrics
-- `stop-all.sh` - Stop all services
-- `test-pattern-pubsub.sh` - Test pattern Pub/Sub
+- `scripts/setup-complete.sh` - Start all services
+- `scripts/start-monitoring.sh` - Start monitoring stack
+- `scripts/run-mini-redis.sh` - Run server with metrics
+- `scripts/stop-all.sh` - Stop all services
 
-- `test-gc.sh` - Test lightweight GC (background cleanup) system
-
-## 🎯 Key Enhancements
+## Key Enhancements
 
 1. **Extended Command Set**: Added missing Redis commands for better compatibility
 2. **Pattern Pub/Sub**: Advanced subscription patterns with efficient regex matching
@@ -215,7 +208,7 @@ cargo test
 6. **Monitoring Stack**: Complete observability with Prometheus and Grafana
 7. **Production Ready**: Proper error handling, testing, and documentation
 
-## 🚀 Usage Examples
+## Usage Examples
 
 ### Pattern Pub/Sub
 ```bash
@@ -248,9 +241,6 @@ curl http://localhost:9123/metrics | grep gc_
 
 # GC metrics in INFO command
 INFO | grep gc_
-
-# Test GC under load
-./test-gc.sh
 ```
 
 ## 🔍 Feature Details

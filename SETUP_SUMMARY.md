@@ -13,21 +13,21 @@ Your Mini-Redis project now has a complete monitoring stack with:
 
 ### Start Everything
 ```bash
-./setup-complete.sh
+scripts/setup-complete.sh
 ```
 
 ### Start Individual Services
 ```bash
 # Monitoring stack only
-./start-monitoring.sh
+scripts/start-monitoring.sh
 
 # Mini-Redis only
-./run-mini-redis.sh
+scripts/run-mini-redis.sh
 ```
 
 ### Stop Everything
 ```bash
-./stop-all.sh
+scripts/stop-all.sh
 ```
 
 ## 🌐 Access Points
@@ -68,10 +68,10 @@ mini-redis/
 ├── docker-compose.yml          # Monitoring stack configuration
 ├── prometheus/                 # Prometheus config
 ├── dashboards/                 # Grafana dashboards and datasources
-├── setup-complete.sh          # Start everything
-├── start-monitoring.sh        # Start monitoring only
-├── run-mini-redis.sh          # Start Mini-Redis only
-├── stop-all.sh                # Stop everything
+├── scripts/setup-complete.sh  # Start everything
+├── scripts/start-monitoring.sh# Start monitoring only
+├── scripts/run-mini-redis.sh  # Start Mini-Redis only
+├── scripts/stop-all.sh        # Stop everything
 ├── MONITORING_README.md       # Detailed monitoring docs
 └── SETUP_SUMMARY.md           # This file
 ```
@@ -92,4 +92,4 @@ mini-redis/
 
 ## 🎊 You're All Set!
 
-Your Mini-Redis project now has enterprise-grade monitoring capabilities. Enjoy exploring your metrics and building beautiful dashboards! 
+Your Mini-Redis project now has enterprise-grade monitoring capabilities. Enjoy exploring your metrics and building beautiful dashboards!

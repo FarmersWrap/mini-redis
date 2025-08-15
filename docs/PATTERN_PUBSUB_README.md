@@ -85,7 +85,7 @@ impl Pattern {
                 _ => c.escape_default().to_string(),
             })
             .collect::<String>();
-        
+
         let regex = regex::Regex::new(&format!("^{}$", regex_str))?;
         Ok(Pattern { pattern: pattern.to_string(), regex })
     }
@@ -98,13 +98,13 @@ impl Pattern {
 impl Db {
     pub(crate) fn publish(&self, key: &str, value: Bytes) -> usize {
         let mut total_recipients = 0;
-        
+
         // Send to exact channel subscribers
         if let Some(sender) = state.pub_sub.get(key) {
             let _ = sender.send(value.clone());
             total_recipients += sender.receiver_count();
         }
-        
+
         // Send to pattern subscribers
         for (pattern, sender) in &state.pattern_subscriptions {
             if pattern.matches(key) {
@@ -112,7 +112,7 @@ impl Db {
                 total_recipients += sender.receiver_count();
             }
         }
-        
+
         total_recipients
     }
 }
@@ -139,7 +139,7 @@ Each pattern subscription creates a new broadcast channel for message distributi
 pub(crate) fn psubscribe(&self, pattern: String) -> broadcast::Receiver<Bytes> {
     let pattern = Pattern::new(&pattern)?;
     let (tx, rx) = broadcast::channel(1);
-    
+
     state.pattern_subscriptions.push((pattern, tx));
     Ok(rx)
 }
@@ -170,14 +170,22 @@ cargo test
 
 ### Manual Testing
 
-Use the provided test script:
+Use the CLI directly:
 
 ```bash
-./test-pattern-pubsub.sh
+# Terminal 1: start server
+cargo run --release --bin mini-redis-server -- --metrics-port 9123
+
+# Terminal 2: subscribe by pattern
+cargo run --release --bin mini-redis-cli -- psubscribe "news.*"
+
+# Terminal 3: publish messages
+cargo run --release --bin mini-redis-cli -- publish news.sports "Sports update"
+cargo run --release --bin mini-redis-cli -- publish news.weather "Weather update"
 ```
 
-This script demonstrates:
-- Pattern subscription with various glob patterns
+This demonstrates:
+- Pattern subscription with glob patterns
 - Message publishing to matching channels
 - Pattern matching behavior
 - Subscription cleanup
@@ -242,4 +250,4 @@ When contributing to pattern Pub/Sub:
 
 ---
 
-*This implementation provides Redis-compatible pattern-based Pub/Sub with efficient glob pattern matching and real-time message routing.* 
+*This implementation provides Redis-compatible pattern-based Pub/Sub with efficient glob pattern matching and real-time message routing.*

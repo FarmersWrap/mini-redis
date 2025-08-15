@@ -16,17 +16,17 @@ Mini-Redis includes a complete monitoring stack that provides real-time visibili
 
 ```bash
 # Start all services (recommended)
-./setup-complete.sh
+scripts/setup-complete.sh
 ```
 
 ### Start Services Individually
 
 ```bash
 # Start monitoring stack (Prometheus + Grafana)
-./start-monitoring.sh
+scripts/start-monitoring.sh
 
 # Start Mini-Redis with metrics enabled
-./run-mini-redis.sh
+scripts/run-mini-redis.sh
 ```
 
 ### Access the Services
@@ -39,7 +39,7 @@ Mini-Redis includes a complete monitoring stack that provides real-time visibili
 ### Stop Everything
 
 ```bash
-./stop-all.sh
+scripts/stop-all.sh
 ```
 
 ## 📊 Metrics Available
@@ -194,11 +194,12 @@ The pre-configured dashboard includes:
 ### Generate Test Data
 
 ```bash
-# Generate continuous test data
-./continuous-data.sh
+# Publish some messages and observe metrics
+cargo run --release --bin mini-redis-cli -- publish news.sports "hello"
+curl -s http://localhost:9123/metrics | grep mini_redis_pub_count
 
-# Or use the test script
-./test-pattern-pubsub.sh
+# Subscribe with a pattern in another terminal
+cargo run --release --bin mini-redis-cli -- psubscribe "news.*"
 ```
 
 ### Verify Metrics
@@ -296,4 +297,4 @@ cargo run --bin mini-redis-cli ping
 
 ---
 
-*This monitoring setup provides comprehensive visibility into Mini-Redis performance and operations with minimal configuration overhead.* 
+*This monitoring setup provides comprehensive visibility into Mini-Redis performance and operations with minimal configuration overhead.*

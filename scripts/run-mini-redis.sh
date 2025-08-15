@@ -25,7 +25,9 @@ else
     echo "Metrics endpoint: http://localhost:9123/metrics"
     echo ""
     echo "Press Ctrl+C to stop the server"
-    
+
     # Run the server with metrics enabled
     cargo run --release --bin mini-redis-server -- --metrics-port 9123
-fi 
+fi
+
+

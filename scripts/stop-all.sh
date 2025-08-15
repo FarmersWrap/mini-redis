@@ -18,4 +18,6 @@ fi
 echo ""
 echo "✅ All services stopped!"
 echo ""
-echo "To start everything again, run: ./setup-complete.sh" 
+echo "To start everything again, run: scripts/setup-complete.sh"
+
+

@@ -19,7 +19,7 @@ wait_for_service() {
     local service_name=$2
     local max_attempts=30
     local attempt=1
-    
+
     echo "Waiting for $service_name to be ready..."
     while [ $attempt -le $max_attempts ]; do
         if curl -s "$url" > /dev/null 2>&1; then
@@ -30,7 +30,7 @@ wait_for_service() {
         sleep 2
         attempt=$((attempt + 1))
     done
-    
+
     echo "Error: $service_name failed to start within expected time"
     return 1
 }
@@ -43,7 +43,7 @@ fi
 
 # Start the monitoring stack
 echo "Starting monitoring stack (Prometheus + Grafana)..."
-./start-monitoring.sh
+"$(dirname "$0")/start-monitoring.sh"
 
 # Wait for services to be ready
 if ! wait_for_service "http://localhost:9090/api/v1/status/config" "Prometheus"; then
@@ -62,7 +62,7 @@ echo ""
 
 # Build and start Mini-Redis
 echo "Building and starting Mini-Redis with metrics..."
-./run-mini-redis.sh &
+"$(dirname "$0")/run-mini-redis.sh" &
 
 # Wait a moment for the server to start
 sleep 3
@@ -91,4 +91,6 @@ if check_port 6379; then
 else
     echo "❌ Failed to start Mini-Redis"
     exit 1
-fi 
+fi
+
+
