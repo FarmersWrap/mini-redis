@@ -26,7 +26,7 @@ fn test_frame_display() {
 
     // Test Null frame
     let frame = Frame::Null;
-    assert_eq!(frame.to_string(), "(null)");
+    assert_eq!(frame.to_string(), "(nil)");
 
     // Test Array frame
     let frame = Frame::Array(vec![
@@ -71,7 +71,7 @@ fn test_frame_parsing() {
     let data = b"$11\r\nhello world\r\n";
     let mut cursor = Cursor::new(data.as_ref());
     let frame = Frame::parse(&mut cursor).unwrap();
-    assert!(matches!(frame, Frame::Bulk(ref b) if b == b"hello world"));
+    assert!(matches!(frame, Frame::Bulk(ref b) if **b == *b"hello world"));
 
     // Test parsing Null frame
     let data = b"$-1\r\n";
@@ -152,7 +152,7 @@ fn test_frame_creation() {
 
     // Test creating Bulk frame
     let frame = Frame::Bulk(Bytes::from("hello world"));
-    assert!(matches!(frame, Frame::Bulk(ref b) if b == b"hello world"));
+    assert!(matches!(frame, Frame::Bulk(ref b) if **b == *b"hello world"));
 
     // Test creating Null frame
     let frame = Frame::Null;
@@ -244,7 +244,7 @@ fn test_frame_with_unicode() {
 #[test]
 fn test_frame_with_special_characters() {
     // Test with newlines in bulk data
-    let data = b"$12\r\nhello\nworld\r\n";
+    let data = b"$11\r\nhello\nworld\r\n";
     let mut cursor = Cursor::new(data.as_ref());
     let frame = Frame::parse(&mut cursor).unwrap();
     match frame {
@@ -258,7 +258,7 @@ fn test_frame_with_special_characters() {
     }
 
     // Test with carriage returns in bulk data
-    let data = b"$12\r\nhello\rworld\r\n";
+    let data = b"$11\r\nhello\rworld\r\n";
     let mut cursor = Cursor::new(data.as_ref());
     let frame = Frame::parse(&mut cursor).unwrap();
     match frame {

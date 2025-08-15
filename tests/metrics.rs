@@ -11,7 +11,7 @@ fn test_metrics_creation() {
     assert_eq!(metrics.get_hits.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert_eq!(metrics.get_misses.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert_eq!(metrics.pub_count.load(std::sync::atomic::Ordering::Relaxed), 0);
-    assert_eq!(metrics.sub_count.load(std::sync::atomic::Ordering::Ordering::Relaxed), 0);
+    assert_eq!(metrics.sub_count.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert_eq!(metrics.keys.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert_eq!(metrics.mem_bytes.load(std::sync::atomic::Ordering::Relaxed), 0);
 }
@@ -46,7 +46,7 @@ fn test_metrics_get_ops() {
     assert_eq!(metrics.get_hits.load(std::sync::atomic::Ordering::Relaxed), 1);
 
     metrics.inc_get_hits();
-    assert_eq!(metrics.get_hits.load(std::sync::atomic::Ordering::Ordering::Relaxed), 2);
+    assert_eq!(metrics.get_hits.load(std::sync::atomic::Ordering::Relaxed), 2);
 
     // Test get hits and misses
     metrics.inc_get_hits();
@@ -116,13 +116,13 @@ fn test_metrics_thread_safety() {
     let mut handles = vec![];
 
     // Spawn multiple threads to test concurrent access
-    for _ in 0..10 {
+    for _i in 0..10 {
         let metrics_clone = Arc::clone(&metrics);
         let handle = std::thread::spawn(move || {
-            for _ in 0..100 {
+            for i in 0..100 {
                 metrics_clone.inc_ops_ok();
                 metrics_clone.inc_get_hits();
-                if _ % 2 == 0 {
+                if i % 2 == 0 {
                     metrics_clone.inc_get_hits();
                 } else {
                     metrics_clone.inc_get_misses();

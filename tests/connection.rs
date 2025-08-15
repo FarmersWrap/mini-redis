@@ -2,6 +2,7 @@ use mini_redis::{Connection, Frame};
 use bytes::Bytes;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
+use std::time::Duration;
 use std::io;
 
 async fn start_test_server() -> (String, oneshot::Sender<()>) {
@@ -244,27 +245,33 @@ async fn test_connection_multiple_frames() {
 #[tokio::test]
 async fn test_connection_concurrent_read_write() {
     let (addr, shutdown) = start_test_server().await;
-    let mut conn = connect_to_server(&addr).await;
+    let conn = connect_to_server(&addr).await;
 
-    // Test concurrent read and write
-    let write_handle = tokio::spawn(async move {
+    // Perform writes and reads within one task to avoid borrowing across tasks,
+    // while still exercising rapid write/read cycles.
+    let handle = tokio::spawn(async move {
+        let mut conn = conn;
         for i in 0..100 {
             let frame = Frame::Integer(i);
             conn.write_frame(&frame).await.unwrap();
         }
+        let mut received = Vec::with_capacity(100);
+        for _ in 0..100 {
+            if let Some(Frame::Integer(v)) = conn.read_frame().await.unwrap() {
+                received.push(v);
+            } else {
+                panic!("Expected Integer frame");
+            }
+        }
+        received
     });
 
-    // Wait for write to complete
-    write_handle.await.unwrap();
+    let received = tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("rw task timed out")
+        .unwrap();
 
-    // Read all frames back
-    for i in 0..100 {
-        let response = conn.read_frame().await.unwrap().unwrap();
-        match response {
-            Frame::Integer(val) => assert_eq!(val, i),
-            _ => panic!("Expected Integer frame"),
-        }
-    }
+    assert_eq!(received, (0..100).collect::<Vec<i64>>());
 
     let _ = shutdown.send(());
 }
@@ -370,7 +377,7 @@ async fn test_connection_performance() {
     let mut conn = connect_to_server(&addr).await;
 
     let start = std::time::Instant::now();
-    let frame_count = 1000;
+    let frame_count = 200; // keep this small to avoid slow CI
 
     // Send many frames
     for i in 0..frame_count {
@@ -390,7 +397,7 @@ async fn test_connection_performance() {
     let duration = start.elapsed();
 
     // Performance should be reasonable
-    assert!(duration.as_secs() < 10); // Should complete in under 10 seconds
+    assert!(duration.as_secs_f64() < 3.0);
 
     let _ = shutdown.send(());
 }

@@ -186,6 +186,25 @@ mini_redis_gc_duration_avg_ms {}\n",
     }
 }
 
+impl Clone for Metrics {
+    fn clone(&self) -> Self {
+        let cloned = Metrics::new();
+        cloned.ops_ok.store(self.ops_ok.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.ops_err.store(self.ops_err.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.get_hits.store(self.get_hits.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.get_misses.store(self.get_misses.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.pub_count.store(self.pub_count.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.sub_count.store(self.sub_count.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.keys.store(self.keys.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.mem_bytes.store(self.mem_bytes.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.gc_cleanup_count.store(self.gc_cleanup_count.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.gc_cleanup_total.store(self.gc_cleanup_total.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.gc_duration_total.store(self.gc_duration_total.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned.gc_duration_count.store(self.gc_duration_count.load(Ordering::Relaxed), Ordering::Relaxed);
+        cloned
+    }
+}
+
 impl Default for Metrics {
     fn default() -> Self {
         Self::new()
@@ -212,26 +231,26 @@ mod tests {
     #[test]
     fn test_metrics_increment() {
         let metrics = Metrics::new();
-        
+
         metrics.inc_ops_ok();
         metrics.inc_ops_ok();
         assert_eq!(metrics.ops_ok.load(Ordering::Relaxed), 2);
-        
+
         metrics.inc_ops_err();
         assert_eq!(metrics.ops_err.load(Ordering::Relaxed), 1);
-        
+
         metrics.inc_get_hits();
         metrics.inc_get_hits();
         metrics.inc_get_hits();
         assert_eq!(metrics.get_hits.load(Ordering::Relaxed), 3);
-        
+
         metrics.inc_get_misses();
         assert_eq!(metrics.get_misses.load(Ordering::Relaxed), 1);
-        
+
         metrics.inc_pub_count();
         metrics.inc_pub_count();
         assert_eq!(metrics.pub_count.load(Ordering::Relaxed), 2);
-        
+
         metrics.inc_sub_count();
         assert_eq!(metrics.sub_count.load(Ordering::Relaxed), 1);
     }
@@ -239,10 +258,10 @@ mod tests {
     #[test]
     fn test_metrics_set() {
         let metrics = Metrics::new();
-        
+
         metrics.set_keys(42);
         assert_eq!(metrics.keys.load(Ordering::Relaxed), 42);
-        
+
         metrics.set_mem_bytes(1024);
         assert_eq!(metrics.mem_bytes.load(Ordering::Relaxed), 1024);
     }
@@ -254,7 +273,7 @@ mod tests {
         metrics.inc_get_hits();
         metrics.set_keys(5);
         metrics.set_mem_bytes(100);
-        
+
         let info = metrics.info_string();
         assert!(info.contains("ops_ok:1"));
         assert!(info.contains("get_hits:1"));
@@ -270,7 +289,7 @@ mod tests {
         metrics.inc_get_hits();
         metrics.set_keys(5);
         metrics.set_mem_bytes(100);
-        
+
         let prometheus = metrics.prometheus_string();
         assert!(prometheus.contains("# HELP mini_redis_ops_ok"));
         assert!(prometheus.contains("# TYPE mini_redis_ops_ok counter"));
@@ -282,17 +301,17 @@ mod tests {
     #[test]
     fn test_gc_metrics() {
         let metrics = Metrics::new();
-        
+
         // Test GC cleanup count
         metrics.inc_gc_cleanup_count();
         metrics.inc_gc_cleanup_count();
         assert_eq!(metrics.gc_cleanup_count.load(Ordering::Relaxed), 2);
-        
+
         // Test GC cleanup total
         metrics.add_gc_cleanup_total(10);
         metrics.add_gc_cleanup_total(15);
         assert_eq!(metrics.gc_cleanup_total.load(Ordering::Relaxed), 25);
-        
+
         // Test GC duration recording
         let duration = Duration::from_millis(50);
         metrics.record_gc_duration(duration);
@@ -301,4 +320,4 @@ mod tests {
         assert_eq!(metrics.gc_duration_total.load(Ordering::Relaxed), 100);
         assert_eq!(metrics.gc_duration_avg_ms(), 50);
     }
-} 
+}

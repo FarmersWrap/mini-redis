@@ -9,7 +9,7 @@ fn test_parse_next_string() {
         Frame::Simple("OK".to_string()),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test parsing bulk strings
     assert_eq!(parse.next_string().unwrap(), "hello");
@@ -29,7 +29,7 @@ fn test_parse_next_bytes() {
         Frame::Bulk(Bytes::from("world")),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     assert_eq!(parse.next_bytes().unwrap(), Bytes::from("hello"));
     assert_eq!(parse.next_bytes().unwrap(), Bytes::from("world"));
@@ -46,7 +46,7 @@ fn test_parse_next_int() {
         Frame::Bulk(Bytes::from("123")),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test parsing integer frames
     assert_eq!(parse.next_int().unwrap(), 42);
@@ -67,7 +67,7 @@ fn test_parse_next_i64() {
         Frame::Bulk(Bytes::from("-123")),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test parsing positive integer
     assert_eq!(parse.next_i64().unwrap(), 42);
@@ -90,11 +90,11 @@ fn test_parse_next_frame() {
         Frame::Simple("OK".to_string()),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test getting next frame
     match parse.next_frame() {
-        Ok(Frame::Bulk(ref b)) => assert_eq!(b, b"hello"),
+        Ok(Frame::Bulk(ref b)) => assert_eq!(&b[..], b"hello"),
         _ => panic!("Expected Bulk frame"),
     }
 
@@ -119,17 +119,17 @@ fn test_parse_peek() {
         Frame::Integer(42),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test peeking without consuming
     match parse.peek() {
-        Ok(Frame::Bulk(ref b)) => assert_eq!(b, b"hello"),
+        Ok(Frame::Bulk(ref b)) => assert_eq!(&b[..], b"hello"),
         _ => panic!("Expected Bulk frame"),
     }
 
     // Verify the frame is still there
     match parse.next_frame() {
-        Ok(Frame::Bulk(ref b)) => assert_eq!(b, b"hello"),
+        Ok(Frame::Bulk(ref b)) => assert_eq!(&b[..], b"hello"),
         _ => panic!("Expected Bulk frame"),
     }
 
@@ -148,11 +148,11 @@ fn test_parse_peek_n() {
         Frame::Simple("OK".to_string()),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test peeking at specific position
     match parse.peek_n(0) {
-        Ok(Frame::Bulk(ref b)) => assert_eq!(b, b"hello"),
+        Ok(Frame::Bulk(ref b)) => assert_eq!(&b[..], b"hello"),
         _ => panic!("Expected Bulk frame at position 0"),
     }
 
@@ -178,7 +178,7 @@ fn test_parse_skip() {
         Frame::Simple("OK".to_string()),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Skip first frame
     parse.skip().unwrap();
@@ -210,7 +210,7 @@ fn test_parse_remaining() {
         Frame::Simple("OK".to_string()),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test initial remaining count
     assert_eq!(parse.remaining(), 3);
@@ -235,7 +235,7 @@ fn test_parse_error_handling() {
         Frame::Bulk(Bytes::from("also_not_a_number")),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test parsing non-numeric bulk string as integer
     let result = parse.next_int();
@@ -249,7 +249,7 @@ fn test_parse_error_handling() {
 #[test]
 fn test_parse_empty_iterator() {
     let frames: Vec<Frame> = vec![];
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test all methods on empty iterator
     assert!(parse.next_string().is_err());
@@ -272,7 +272,7 @@ fn test_parse_mixed_types() {
         Frame::Simple("OK".to_string()),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test parsing bulk string as integer
     assert_eq!(parse.next_int().unwrap(), 123);
@@ -294,7 +294,7 @@ fn test_parse_unicode_strings() {
         Frame::Bulk(Bytes::from("こんにちは")),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test parsing UTF-8 strings
     assert_eq!(parse.next_string().unwrap(), "Hello 世界");
@@ -310,7 +310,7 @@ fn test_parse_large_numbers() {
         Frame::Bulk(Bytes::from("-9223372036854775808")),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test parsing large integers
     assert_eq!(parse.next_int().unwrap(), 9223372036854775807);
@@ -328,7 +328,7 @@ fn test_parse_error_types() {
         Frame::Error("WRONGTYPE Operation against a key holding the wrong kind of value".to_string()),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test parsing error frames as strings
     assert_eq!(parse.next_string().unwrap(), "ERR invalid command");
@@ -342,7 +342,7 @@ fn test_parse_null_handling() {
         Frame::Bulk(Bytes::from("value")),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test that Null frames can be parsed as strings (empty string)
     assert_eq!(parse.next_string().unwrap(), "");
@@ -361,7 +361,7 @@ fn test_parse_array_frames() {
         Frame::Bulk(Bytes::from("simple")),
     ];
 
-    let mut parse = Parse::new(frames.into_iter());
+    let mut parse = Parse::new(Frame::Array(frames)).unwrap();
 
     // Test that array frames can be parsed as strings (string representation)
     let result = parse.next_string();

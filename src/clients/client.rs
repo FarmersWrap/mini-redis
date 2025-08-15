@@ -349,16 +349,12 @@ impl Client {
             match response {
                 Frame::Array(ref frame) => match frame.as_slice() {
                     // The server responds with an array frame in the form of:
-                    //
-                    // ```
                     // [ "subscribe", channel, num-subscribed ]
-                    // ```
-                    //
-                    // where channel is the name of the channel and
-                    // num-subscribed is the number of channels that the client
-                    // is currently subscribed to.
-                    [subscribe, schannel, ..]
-                        if *subscribe == "subscribe" && *schannel == channel => {}
+                    [subscribe, schannel, ..] if *subscribe == "subscribe" => {
+                        if schannel.to_string() != *channel {
+                            return Err(response.to_error());
+                        }
+                    }
                     _ => return Err(response.to_error()),
                 },
                 frame => return Err(frame.to_error()),

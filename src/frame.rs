@@ -9,7 +9,7 @@ use std::num::TryFromIntError;
 use std::string::FromUtf8Error;
 
 /// A frame in the Redis protocol.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame {
     Simple(String),
     Error(String),
@@ -165,7 +165,7 @@ impl Frame {
 
                 Ok(Frame::Array(out))
             }
-            _ => unimplemented!(),
+            _ => return Err("protocol error; invalid frame type".into()),
         }
     }
 
@@ -191,7 +191,7 @@ impl fmt::Display for Frame {
 
         match self {
             Frame::Simple(response) => response.fmt(fmt),
-            Frame::Error(msg) => write!(fmt, "error: {}", msg),
+            Frame::Error(msg) => write!(fmt, "{}", msg),
             Frame::Integer(num) => num.fmt(fmt),
             Frame::Bulk(msg) => match str::from_utf8(msg) {
                 Ok(string) => string.fmt(fmt),
@@ -199,16 +199,14 @@ impl fmt::Display for Frame {
             },
             Frame::Null => "(nil)".fmt(fmt),
             Frame::Array(parts) => {
+                write!(fmt, "[")?;
                 for (i, part) in parts.iter().enumerate() {
                     if i > 0 {
-                        // use space as the array element display separator
-                        write!(fmt, " ")?;
+                        write!(fmt, ", ")?;
                     }
-
-                    part.fmt(fmt)?;
+                    write!(fmt, "{}", part)?;
                 }
-
-                Ok(())
+                write!(fmt, "]")
             }
         }
     }

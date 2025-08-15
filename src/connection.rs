@@ -208,11 +208,58 @@ impl Connection {
                 self.stream.write_all(val).await?;
                 self.stream.write_all(b"\r\n").await?;
             }
-            // Encoding an `Array` from within a value cannot be done using a
-            // recursive strategy. In general, async fns do not support
-            // recursion. Mini-redis has not needed to encode nested arrays yet,
-            // so for now it is skipped.
-            Frame::Array(_val) => unreachable!(),
+            // Support nested arrays without recursion by iterating with a stack
+            Frame::Array(val) => {
+                use std::collections::VecDeque;
+                let mut stack: VecDeque<&Frame> = VecDeque::new();
+                // write the outermost first
+                self.stream.write_u8(b'*').await?;
+                self.write_decimal(val.len() as u64).await?;
+                for entry in &**val {
+                    stack.push_back(entry);
+                }
+                while let Some(next) = stack.pop_front() {
+                    match next {
+                        Frame::Array(inner) => {
+                            self.stream.write_u8(b'*').await?;
+                            self.write_decimal(inner.len() as u64).await?;
+                            for e in inner.iter() {
+                                stack.push_front(e);
+                            }
+                        }
+                        other => {
+                            // delegate non-array frames (these arms are non-recursive)
+                            match other {
+                                Frame::Simple(val) => {
+                                    self.stream.write_u8(b'+').await?;
+                                    self.stream.write_all(val.as_bytes()).await?;
+                                    self.stream.write_all(b"\r\n").await?;
+                                }
+                                Frame::Error(val) => {
+                                    self.stream.write_u8(b'-').await?;
+                                    self.stream.write_all(val.as_bytes()).await?;
+                                    self.stream.write_all(b"\r\n").await?;
+                                }
+                                Frame::Integer(val) => {
+                                    self.stream.write_u8(b':').await?;
+                                    self.write_signed_decimal(*val).await?;
+                                }
+                                Frame::Null => {
+                                    self.stream.write_all(b"$-1\r\n").await?;
+                                }
+                                Frame::Bulk(val) => {
+                                    let len = val.len();
+                                    self.stream.write_u8(b'$').await?;
+                                    self.write_decimal(len as u64).await?;
+                                    self.stream.write_all(val).await?;
+                                    self.stream.write_all(b"\r\n").await?;
+                                }
+                                Frame::Array(_) => unreachable!(),
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())

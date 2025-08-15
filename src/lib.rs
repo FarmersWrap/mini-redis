@@ -42,7 +42,7 @@ use db::Db;
 use db::DbDropGuard;
 
 mod parse;
-use parse::{Parse, ParseError};
+pub use parse::{Parse, ParseError};
 
 mod pattern;
 pub use pattern::Pattern;
@@ -56,7 +56,7 @@ pub use gc_task::GcTask;
 pub mod server;
 
 mod shutdown;
-use shutdown::Shutdown;
+pub use shutdown::Shutdown;
 
 mod metrics;
 pub use metrics::Metrics;
