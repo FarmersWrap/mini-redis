@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::{Metrics, Pattern};
 
 /// A wrapper around a `Db` instance. This exists to allow orderly cleanup
-/// of the `Db` by signalling the background purge task to shut down when
+/// of the `Db` by signalling the background task to shut down when
 /// this struct is dropped.
 #[derive(Debug)]
 pub(crate) struct DbDropGuard {
@@ -66,10 +66,19 @@ struct State {
     /// `std::collections::HashMap` works fine.
     entries: HashMap<String, Entry>,
 
+    /// LRU bookkeeping for key-value entries: doubly-linked list via key links.
+    /// `lru_head` is most-recently used, `lru_tail` is least-recently used.
+    lru_links: HashMap<String, (Option<String>, Option<String>)>,
+    lru_head: Option<String>,
+    lru_tail: Option<String>,
+
+    /// Maximum allowed number of keys in `entries`. When exceeded, evict LRU.
+    max_keys: usize,
+
     /// The pub/sub key-space. Redis uses a **separate** key space for key-value
     /// and pub/sub. `mini-redis` handles this by using a separate `HashMap`.
     pub_sub: HashMap<String, broadcast::Sender<Bytes>>,
-    
+
     /// Pattern-based subscriptions for PSUBSCRIBE
     pattern_subscriptions: Vec<(Pattern, broadcast::Sender<Bytes>)>,
 
@@ -130,6 +139,10 @@ impl Db {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 entries: HashMap::new(),
+                lru_links: HashMap::new(),
+                lru_head: None,
+                lru_tail: None,
+                max_keys: 10000, // Default max keys
                 pub_sub: HashMap::new(),
                 pattern_subscriptions: Vec::new(),
                 expirations: BTreeSet::new(),
@@ -154,21 +167,34 @@ impl Db {
     ///
     /// Returns `None` if the key does not exist.
     pub(crate) fn get(&self, key: &str) -> Option<Bytes> {
-        let state = self.shared.state.lock().unwrap();
-        let entry = state.entries.get(key)?;
+        let mut state = self.shared.state.lock().unwrap();
 
-        // Check if the entry has expired
-        if let Some(expires_at) = entry.expires_at {
-            if expires_at <= Instant::now() {
-                return None;
+        // Check if key exists and handle lazy expiration
+        if let Some(entry) = state.entries.get(key) {
+            if let Some(expires_at) = entry.expires_at {
+                if expires_at <= Instant::now() {
+                    // Expired: remove and return None
+                    state.entries.remove(key);
+                    state.expirations.remove(&(expires_at, key.to_string()));
+                    state.lru_remove_key(key);
+                    return None;
+                }
             }
+
+            // Clone the data before touching LRU to avoid borrow conflicts
+            let data = entry.data.clone();
+
+            // Touch LRU (move to front)
+            state.lru_touch_front(key);
+
+            // Update metrics
+            self.shared.metrics.inc_get_hits();
+            self.shared.metrics.inc_ops_ok();
+
+            Some(data)
+        } else {
+            None
         }
-
-        // Update metrics
-        self.shared.metrics.inc_get_hits();
-        self.shared.metrics.inc_ops_ok();
-
-        Some(entry.data.clone())
     }
 
     /// Set a key-value pair in the database.
@@ -177,12 +203,13 @@ impl Db {
     pub(crate) fn set(&self, key: String, value: Bytes, expire: Option<Duration>) {
         let mut state = self.shared.state.lock().unwrap();
 
-        // Remove old entry if it exists to update memory usage
-        if let Some(_old_entry) = state.entries.get(&key) {
-            // Remove old expiration if it exists
-            if let Some(old_expires_at) = _old_entry.expires_at {
-                state.expirations.remove(&(old_expires_at, key.clone()));
-            }
+        // Check if key already exists and get old expiration
+        let old_expires_at = state.entries.get(&key).and_then(|e| e.expires_at);
+        let key_exists = state.entries.contains_key(&key);
+
+        // Remove old expiration if it exists
+        if let Some(old_expires_at) = old_expires_at {
+            state.expirations.remove(&(old_expires_at, key.clone()));
         }
 
         // Create new entry
@@ -192,13 +219,23 @@ impl Db {
             expires_at,
         };
 
-        // Add to entries
+        // Insert/update the entry
         state.entries.insert(key.clone(), entry);
 
         // Add to expirations if TTL is set
         if let Some(expires_at) = expires_at {
-            state.expirations.insert((expires_at, key));
+            state.expirations.insert((expires_at, key.clone()));
         }
+
+        // Update LRU: move to front if exists, insert if new
+        if key_exists {
+            state.lru_touch_front(&key);
+        } else {
+            state.lru_insert_front(key.clone());
+        }
+
+        // Enforce capacity by evicting LRU entries
+        state.evict_if_needed();
 
         // Update metrics
         self.shared.metrics.inc_ops_ok();
@@ -226,17 +263,19 @@ impl Db {
         None
     }
 
-
-
     /// Check if a key exists in the database.
     ///
     /// Returns `false` if the key does not exist or has expired.
     pub(crate) fn contains_key(&self, key: &str) -> bool {
-        let state = self.shared.state.lock().unwrap();
+        let mut state = self.shared.state.lock().unwrap();
         if let Some(entry) = state.entries.get(key) {
             // Check if the entry has expired
             if let Some(expires_at) = entry.expires_at {
                 if expires_at <= Instant::now() {
+                    // Remove expired entry
+                    state.entries.remove(key);
+                    state.expirations.remove(&(expires_at, key.to_string()));
+                    state.lru_remove_key(key);
                     return false;
                 }
             }
@@ -246,6 +285,19 @@ impl Db {
         } else {
             false
         }
+    }
+
+    /// Set the maximum allowed number of keys in the key-value store.
+    pub(crate) fn set_max_keys(&self, max: usize) {
+        let mut state = self.shared.state.lock().unwrap();
+        state.max_keys = max;
+        state.evict_if_needed();
+    }
+
+    /// Get the configured maximum number of keys.
+    pub(crate) fn get_max_keys(&self) -> usize {
+        let state = self.shared.state.lock().unwrap();
+        state.max_keys
     }
 
     /// Subscribe to a channel.
@@ -355,10 +407,10 @@ impl Db {
     pub(crate) async fn cleanup_expired_keys_batch(&self, batch_size: usize) -> usize {
         let mut cleaned_count = 0;
         let now = Instant::now();
-        
+
         // Get a lock on the state
         let mut state = self.shared.state.lock().unwrap();
-        
+
         // Find expired keys up to the batch size
         let mut expired_keys = Vec::new();
         for &(expires_at, ref key) in &state.expirations {
@@ -372,25 +424,30 @@ impl Db {
                 break;
             }
         }
-        
+
         // Remove expired keys
-        for key in expired_keys {
-            if let Some(entry) = state.entries.remove(&key) {
+        for key in &expired_keys {
+            if let Some(entry) = state.entries.remove(key) {
                 // Remove from expirations
                 if let Some(expires_at) = entry.expires_at {
                     state.expirations.remove(&(expires_at, key.clone()));
                 }
-                
+
                 cleaned_count += 1;
-                
+
                 // Note: Keyspace notifications were removed from this implementation
             }
         }
-        
+
         // Update metrics
         if cleaned_count > 0 {
             self.shared.metrics.set_keys(state.entries.len() as u64);
-            
+
+            // Remove from LRU as well
+            for key in &expired_keys {
+                state.lru_remove_key(key);
+            }
+
             // Recalculate memory usage
             let mut total_memory = 0u64;
             for (key, entry) in &state.entries {
@@ -398,7 +455,7 @@ impl Db {
             }
             self.shared.metrics.set_mem_bytes(total_memory);
         }
-        
+
         cleaned_count
     }
 }
@@ -423,17 +480,22 @@ impl Shared {
         }
 
         // Remove expired keys
-        for key in expired_keys {
-            state.entries.remove(&key);
+        for key in &expired_keys {
+            state.entries.remove(key);
             // Note: We don't remove from expirations here as we'll do it in the loop above
         }
 
         // Remove expired entries from expirations
         state.expirations.retain(|&(expires_at, _)| expires_at > now);
 
+        // Remove expired keys from LRU
+        for key in &expired_keys {
+            state.lru_remove_key(key);
+        }
+
         // Update metrics
         self.metrics.set_keys(state.entries.len() as u64);
-        
+
         // Recalculate memory usage
         let mut total_memory = 0u64;
         for (key, entry) in &state.entries {
@@ -452,7 +514,100 @@ impl Shared {
     }
 }
 
+impl State {
+    /// Touch a key in LRU (move to front)
+    fn lru_touch_front(&mut self, key: &str) {
+        if !self.lru_links.contains_key(key) {
+            // Not in list, insert as front
+            self.lru_insert_front(key.to_string());
+            return;
+        }
+        // Remove then insert at front
+        self.lru_remove_key(key);
+        self.lru_insert_front(key.to_string());
+    }
 
+    /// Insert a new key at the front of LRU
+    fn lru_insert_front(&mut self, key: String) {
+        let old_head = self.lru_head.take();
+        // New node: prev=None, next=old_head
+        self.lru_links.insert(key.clone(), (None, old_head.clone()));
+        if let Some(head_key) = old_head {
+            if let Some((ref mut prev, _next)) = self.lru_links.get_mut(&head_key) {
+                *prev = Some(key.clone());
+            }
+        }
+        if self.lru_tail.is_none() {
+            self.lru_tail = Some(key.clone());
+        }
+        self.lru_head = Some(key);
+    }
+
+    /// Remove a key from LRU
+    fn lru_remove_key(&mut self, key: &str) {
+        if let Some((prev, next)) = self.lru_links.remove(key) {
+            match (prev, next) {
+                (Some(prev_key), Some(next_key)) => {
+                    // Middle node: update neighbors
+                    if let Some((_p, ref mut n)) = self.lru_links.get_mut(&prev_key) {
+                        *n = Some(next_key.clone());
+                    }
+                    if let Some((ref mut p, _n)) = self.lru_links.get_mut(&next_key) {
+                        *p = Some(prev_key);
+                    }
+                }
+                (Some(prev_key), None) => {
+                    // Removing tail: update previous node and tail pointer
+                    if let Some((_p, ref mut n)) = self.lru_links.get_mut(&prev_key) {
+                        *n = None;
+                    }
+                    if self.lru_tail.as_deref() == Some(key) {
+                        self.lru_tail = Some(prev_key);
+                    }
+                }
+                (None, Some(next_key)) => {
+                    // Removing head: update next node and head pointer
+                    if let Some((ref mut p, _n)) = self.lru_links.get_mut(&next_key) {
+                        *p = None;
+                    }
+                    if self.lru_head.as_deref() == Some(key) {
+                        self.lru_head = Some(next_key);
+                    }
+                }
+                (None, None) => {
+                    // Single element: clear head and tail
+                    if self.lru_head.as_deref() == Some(key) {
+                        self.lru_head = None;
+                    }
+                    if self.lru_tail.as_deref() == Some(key) {
+                        self.lru_tail = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Evict least-recently used entries if capacity exceeded
+    fn evict_if_needed(&mut self) {
+        while self.entries.len() > self.max_keys {
+            // Evict least-recently used (tail)
+            let victim = match self.lru_tail.clone() {
+                Some(k) => k,
+                None => break,
+            };
+
+            // Remove from entries
+            if let Some(entry) = self.entries.remove(&victim) {
+                if let Some(when) = entry.expires_at {
+                    self.expirations.remove(&(when, victim.clone()));
+                }
+            }
+
+            // Remove from LRU
+            self.lru_remove_key(&victim);
+        }
+    }
+}
 
 /// Background task that purges expired keys.
 async fn purge_expired_tasks(shared: Arc<Shared>) {
